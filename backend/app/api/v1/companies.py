@@ -13,6 +13,7 @@ from app.db.models import Asset
 from app.db.session import get_db
 from app.services.adjusted_prices import get_adjusted_bars
 from app.services.corporate_actions import get_or_fetch_corporate_actions
+from app.services.fundamentals import get_or_fetch_ratios, get_or_fetch_statements
 from app.services.search import search_assets
 from app.services.technicals import compute_technicals
 
@@ -124,6 +125,43 @@ def get_corporate_actions(symbol: str, db: Session = Depends(get_db)) -> dict:
         for a in actions
     ]
     return _envelope(data, source="yfinance_actions", confidence="high" if data else "low")
+
+
+@router.get("/companies/{symbol}/fundamentals")
+def get_fundamentals(symbol: str, db: Session = Depends(get_db)) -> dict:
+    """Best-effort fundamentals (Build_plan.md §7/§H) — every field carries
+    its own confidence; a missing field is omitted, never guessed."""
+    asset = _get_asset_or_404(db, symbol)
+
+    ratio_rows = get_or_fetch_ratios(db, asset)
+    statement_rows = get_or_fetch_statements(db, asset, "income", "FY")
+
+    periods: dict[str, dict] = {}
+    for row in statement_rows:
+        period = periods.setdefault(
+            row.period_end.isoformat(),
+            {"period_end": row.period_end, "period_type": row.period_type, "line_items": {}},
+        )
+        period["line_items"][row.line_item] = float(row.value)
+
+    data = {
+        "ratios": [
+            {
+                "metric": row.metric,
+                "value": float(row.value),
+                "source": row.source,
+                "confidence": row.confidence,
+            }
+            for row in ratio_rows
+        ],
+        "income_statement": sorted(
+            periods.values(), key=lambda p: p["period_end"], reverse=True
+        ),
+    }
+    # Always "low": even a successful fetch here is single-source and
+    # uncross-checked (Build_plan.md §6/§H) — finding data doesn't earn it
+    # more trust than the source itself has.
+    return _envelope(data, source="yfinance_fundamentals", confidence="low")
 
 
 @router.get("/companies/{symbol}/technicals")

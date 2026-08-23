@@ -226,3 +226,15 @@ __marimo__/
 .streamlit/secrets.toml
 .DS_Store
 architecture/.DS_Store
+
+# The Python "Distribution / packaging" patterns above (lib/, build/,
+# dist/, etc.) are unscoped and match at any depth, so they silently
+# matched frontend/lib/ too — frontend/lib/api.ts and frontend/lib/utils.ts
+# were never actually committed in any prior commit despite `git add -A`
+# reporting success, since git never saw them as untracked in the first
+# place (caught while auditing a "no changes" diff that should have had
+# one). Re-included explicitly here — must stay last: gitignore negations
+# only take effect after the pattern they override.
+!frontend/lib/
+!frontend/build/
+!frontend/dist/

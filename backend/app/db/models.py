@@ -135,6 +135,53 @@ class ProviderFetchLog(Base):
     )
 
 
+class FinancialStatement(Base):
+    """Best-effort statement line items (Build_plan.md §7/§C, D-002): partial +
+    confidence-flagged, never fabricated. `confidence` is per-row, not
+    per-asset, since coverage is uneven line-item by line-item."""
+
+    __tablename__ = "financial_statement"
+    __table_args__ = (
+        UniqueConstraint(
+            "asset_id",
+            "period_type",
+            "period_end",
+            "statement_type",
+            "line_item",
+            name="uq_financial_statement_line",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), index=True)
+    period_type: Mapped[str]  # "FY" | "Q"
+    period_end: Mapped[dt.date] = mapped_column(Date)
+    statement_type: Mapped[str]  # "income" | "balance_sheet" | "cash_flow"
+    line_item: Mapped[str]
+    value: Mapped[Decimal] = mapped_column(Numeric(24, 4))
+    source: Mapped[str]
+    confidence: Mapped[str]  # "high" | "low"
+    as_of: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FinancialMetric(Base):
+    """Best-effort derived ratios (ROE/ROCE/D-E/margins/growth). Latest-known-
+    value cache, not a historical series — upserted per (asset, metric)."""
+
+    __tablename__ = "financial_metric"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "metric", name="uq_financial_metric_asset_metric"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), index=True)
+    metric: Mapped[str]
+    value: Mapped[Decimal] = mapped_column(Numeric(24, 6))
+    source: Mapped[str]
+    confidence: Mapped[str]  # "high" | "low"
+    as_of: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class CorporateAction(Base):
     """Splits/bonus/dividends/rights — drives price adjustment (correctness-critical, D-007)."""
 

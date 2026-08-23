@@ -2,11 +2,20 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { PriceChart } from "@/components/charts/PriceChart";
+import { FundamentalsPanel } from "@/components/domain/FundamentalsPanel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, getCompany, getCorporateActions, getPrices, getTechnicals, type PriceRange } from "@/lib/api";
+import {
+  ApiError,
+  getCompany,
+  getCorporateActions,
+  getFundamentals,
+  getPrices,
+  getTechnicals,
+  type PriceRange,
+} from "@/lib/api";
 
 const RANGES: PriceRange[] = ["1m", "3m", "6m", "1y", "5y"];
 
@@ -35,10 +44,11 @@ export default async function CompanyPage({
     throw error;
   }
 
-  const [prices, technicals, corporateActions] = await Promise.all([
+  const [prices, technicals, corporateActions, fundamentals] = await Promise.all([
     getPrices(symbol, range),
     getTechnicals(symbol, range),
     getCorporateActions(symbol),
+    getFundamentals(symbol),
   ]);
 
   const header = company.data;
@@ -107,6 +117,8 @@ export default async function CompanyPage({
       </Card>
 
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
+
+      <FundamentalsPanel fundamentals={fundamentals.data} meta={fundamentals.meta} />
     </main>
   );
 }
