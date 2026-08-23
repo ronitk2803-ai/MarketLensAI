@@ -1,0 +1,34 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application configuration, sourced from environment variables / .env.
+
+    Codename `mlai` — no brand name hard-coded (see product_principles.md).
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    env: str = "development"
+    api_v1_prefix: str = "/api/v1"
+
+    # Comma-separated list of allowed CORS origins.
+    cors_origins: str = "http://localhost:3000"
+
+    database_url: str = "postgresql+psycopg://mlai:mlai@localhost:5432/mlai"
+
+    # Provider credentials — never committed, never sent to the frontend.
+    upstox_api_key: str | None = None
+    upstox_api_secret: str | None = None
+    upstox_redirect_uri: str | None = None
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

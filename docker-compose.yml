@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mlai
+      POSTGRES_PASSWORD: mlai
+      POSTGRES_DB: mlai
+    ports:
+      - "5432:5432"
+    volumes:
+      - mlai_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mlai_pgdata:
