@@ -7,7 +7,7 @@ from app.db.models import Asset, Company, CorporateAction, Industry, InstrumentM
 
 
 def test_asset_roundtrip(db: Session) -> None:
-    asset = Asset(symbol="RELIANCE", exchange="NSE", market="IN", name="Reliance Industries")
+    asset = Asset(symbol="ZZTEST1", exchange="NSE", market="IN", name="Test Co 1")
     db.add(asset)
     db.flush()
 
@@ -47,8 +47,8 @@ def test_asset_roundtrip(db: Session) -> None:
     )
     db.flush()
 
-    fetched = db.query(Asset).filter_by(symbol="RELIANCE", market="IN").one()
-    assert fetched.name == "Reliance Industries"
+    fetched = db.query(Asset).filter_by(symbol="ZZTEST1", market="IN").one()
+    assert fetched.name == "Test Co 1"
     assert fetched.company.sector == "Energy"
     assert fetched.company.industry.code == "OIL_GAS"
     assert len(fetched.instrument_maps) == 1

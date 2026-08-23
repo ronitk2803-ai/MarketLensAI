@@ -13,7 +13,7 @@ EVENTS = [
 
 
 def _make_asset(db: Session) -> Asset:
-    asset = Asset(symbol="RELIANCE", exchange="NSE", market="IN", name="Reliance Industries")
+    asset = Asset(symbol="ZZTEST1", exchange="NSE", market="IN", name="Test Co 1")
     db.add(asset)
     db.flush()
     return asset
