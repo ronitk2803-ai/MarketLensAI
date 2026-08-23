@@ -5,6 +5,7 @@ import { PriceChart } from "@/components/charts/PriceChart";
 import { FundamentalsPanel } from "@/components/domain/FundamentalsPanel";
 import { NewsPanel } from "@/components/domain/NewsPanel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
+import { ScorePanel } from "@/components/domain/ScorePanel";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +16,7 @@ import {
   getFundamentals,
   getNews,
   getPrices,
+  getScore,
   getTechnicals,
   type PriceRange,
 } from "@/lib/api";
@@ -46,12 +48,13 @@ export default async function CompanyPage({
     throw error;
   }
 
-  const [prices, technicals, corporateActions, fundamentals, news] = await Promise.all([
+  const [prices, technicals, corporateActions, fundamentals, news, score] = await Promise.all([
     getPrices(symbol, range),
     getTechnicals(symbol, range),
     getCorporateActions(symbol),
     getFundamentals(symbol),
     getNews(symbol),
+    getScore(symbol),
   ]);
 
   const header = company.data;
@@ -118,6 +121,8 @@ export default async function CompanyPage({
           />
         </CardContent>
       </Card>
+
+      <ScorePanel score={score.data} meta={score.meta} />
 
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
 

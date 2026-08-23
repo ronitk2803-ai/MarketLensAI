@@ -261,3 +261,24 @@ def test_get_news_empty_when_none_found(seeded_asset: Asset) -> None:
 def test_get_news_404_for_unknown_symbol() -> None:
     response = client.get("/api/v1/companies/NOSUCHSYMBOL/news")
     assert response.status_code == 404
+
+
+def test_get_score_returns_value_and_components(seeded_asset: Asset) -> None:
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/score")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["value"] is not None
+    assert 0 <= body["data"]["value"] <= 100
+    assert len(body["data"]["components"]) == 5
+    assert body["meta"]["source"] == "mlai_scoring_v1"
+
+
+def test_get_score_404_for_unknown_symbol() -> None:
+    response = client.get("/api/v1/companies/NOSUCHSYMBOL/score")
+    assert response.status_code == 404
+
+
+def test_get_score_is_cached_within_the_same_day(seeded_asset: Asset) -> None:
+    first = client.get(f"/api/v1/companies/{seeded_asset.symbol}/score").json()
+    second = client.get(f"/api/v1/companies/{seeded_asset.symbol}/score").json()
+    assert first["data"]["as_of"] == second["data"]["as_of"]

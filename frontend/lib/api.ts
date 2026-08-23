@@ -190,6 +190,26 @@ export function getOpportunities(screen: string) {
   });
 }
 
+export interface ScoreComponent {
+  component: string;
+  normalized_value: number | null;
+  weight: number;
+  contribution: number | null;
+}
+
+export interface Score {
+  value: number | null;
+  coverage: number;
+  as_of: string;
+  components: ScoreComponent[];
+}
+
+export function getScore(symbol: string) {
+  return apiFetch<Score>(`/companies/${encodeURIComponent(symbol)}/score`, {
+    next: { revalidate: 900 },
+  });
+}
+
 export function getTechnicals(symbol: string, range: PriceRange = "1y") {
   return apiFetch<Technicals>(`/companies/${encodeURIComponent(symbol)}/technicals?range=${range}`, {
     next: { revalidate: 60 },

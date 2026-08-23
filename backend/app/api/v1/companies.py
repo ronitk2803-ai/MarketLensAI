@@ -15,6 +15,7 @@ from app.services.adjusted_prices import get_adjusted_bars
 from app.services.corporate_actions import get_or_fetch_corporate_actions
 from app.services.fundamentals import get_or_fetch_ratios, get_or_fetch_statements
 from app.services.news import get_or_fetch_news
+from app.services.scoring import get_or_compute_score
 from app.services.search import search_assets
 from app.services.technicals import compute_technicals
 
@@ -179,6 +180,33 @@ def get_news(symbol: str, db: Session = Depends(get_db)) -> dict:
         for a in articles
     ]
     return _envelope(data, source="google_news", confidence="high" if data else "low")
+
+
+@router.get("/companies/{symbol}/score")
+def get_score(symbol: str, db: Session = Depends(get_db)) -> dict:
+    """Opportunity Score (Build_plan.md §L) — research attractiveness /
+    opportunity characteristics, never a return prediction (enforced in
+    copy at the frontend layer too)."""
+    asset = _get_asset_or_404(db, symbol)
+    score, components = get_or_compute_score(db, asset)
+
+    data = {
+        "value": float(score.value) if score.value is not None else None,
+        "coverage": float(score.coverage),
+        "as_of": score.as_of,
+        "components": [
+            {
+                "component": c.component,
+                "normalized_value": (
+                    float(c.normalized_value) if c.normalized_value is not None else None
+                ),
+                "weight": float(c.weight),
+                "contribution": float(c.contribution) if c.contribution is not None else None,
+            }
+            for c in components
+        ],
+    }
+    return _envelope(data, source="mlai_scoring_v1", confidence=score.confidence)
 
 
 @router.get("/companies/{symbol}/technicals")

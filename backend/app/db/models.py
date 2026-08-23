@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -222,3 +223,59 @@ class NewsArticle(Base):
     fetched_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class ScoreProfile(Base):
+    """Weight configuration for the scoring engine (Build_plan.md §L/§M):
+    "weights are versioned configuration, never code constants." Only a
+    "default" profile is seeded — industry-specific profiles are P2 (see
+    app/engines/scoring/registry.py for why real ones aren't faked yet).
+    `active` lets a new version supersede an old one without deleting the
+    historical record a past Score row was computed against."""
+
+    __tablename__ = "score_profile"
+    __table_args__ = (
+        UniqueConstraint("industry_code", "version", name="uq_score_profile_industry_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    industry_code: Mapped[str] = mapped_column(default="default")
+    version: Mapped[int] = mapped_column(default=1)
+    weights: Mapped[dict] = mapped_column(JSONB)
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Score(Base):
+    """Append-only per Build_plan.md §L ("snapshot inputs every run" ->
+    future backtesting needs the historical record, not just latest-wins).
+    The service only computes a new row once per day (EOD data doesn't
+    change intraday) rather than on every request."""
+
+    __tablename__ = "score"
+    __table_args__ = (Index("ix_score_asset_as_of", "asset_id", "as_of"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("score_profile.id"))
+    value: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    coverage: Mapped[Decimal] = mapped_column(Numeric(4, 3))
+    confidence: Mapped[str]  # "high" | "low"
+    as_of: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScoreComponent(Base):
+    """Per-component breakdown for one `Score` row — the input snapshot
+    that makes the score explainable and, later, backtestable."""
+
+    __tablename__ = "score_component"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    score_id: Mapped[int] = mapped_column(ForeignKey("score.id"), index=True)
+    component: Mapped[str]
+    raw_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    normalized_value: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    weight: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    contribution: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
