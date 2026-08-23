@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import { AppHeader } from "@/components/domain/AppHeader";
+import { ThemeScript } from "@/components/domain/ThemeToggle";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const geistSans = Geist({
@@ -25,11 +26,23 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">
-        <TooltipProvider>
+      <head>
+        <ThemeScript />
+      </head>
+      <body className="flex min-h-full flex-col">
+        <TooltipProvider delayDuration={150}>
           <AppHeader />
           {children}
+          <footer className="mt-auto border-t border-border px-4 py-3">
+            <p className="mx-auto max-w-[1600px] text-[11px] leading-relaxed text-muted-foreground">
+              Research tooling, not investment advice. Scores describe research
+              attractiveness — never a predicted return or a buy/sell recommendation. Data is
+              end-of-day and may be delayed or incomplete; every figure carries its own source
+              and timestamp.
+            </p>
+          </footer>
         </TooltipProvider>
       </body>
     </html>

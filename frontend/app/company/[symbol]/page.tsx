@@ -7,8 +7,10 @@ import { NewsPanel } from "@/components/domain/NewsPanel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { ScorePanel } from "@/components/domain/ScorePanel";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Delta } from "@/components/terminal/Delta";
+import { Panel } from "@/components/terminal/Panel";
+import { cn } from "@/lib/utils";
+import { compact, price, tradingDate } from "@/lib/format";
 import {
   ApiError,
   getCompany,
@@ -59,35 +61,58 @@ export default async function CompanyPage({
 
   const header = company.data;
   const changePct = header.latest_price.change_pct;
+  const bars = prices.data;
+  const latestBar = bars.length > 0 ? bars[bars.length - 1] : null;
+
+  // Session stats come from the latest bar rather than the header, so they
+  // stay consistent with the candle the chart is actually showing.
+  const sessionStats = [
+    { label: "Open", value: price(latestBar?.open) },
+    { label: "High", value: price(latestBar?.high) },
+    { label: "Low", value: price(latestBar?.low) },
+    { label: "Volume", value: compact(latestBar?.volume) },
+  ];
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">{header.name}</h1>
-            <Badge variant="outline">{header.symbol}</Badge>
-            <Badge variant="outline">{header.exchange}</Badge>
+    <main className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 px-4 py-4">
+      {/* Quote header — the anchor for everything below it. */}
+      <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3 rounded-md border border-border bg-surface px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <h1 className="num text-xl font-semibold tracking-tight">{header.symbol}</h1>
+            <span className="rounded-sm border border-border px-1.5 py-px text-[10px] text-muted-foreground">
+              {header.exchange}
+            </span>
+            <span className="truncate text-sm text-muted-foreground">{header.name}</span>
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
             {header.sector ?? "Sector unavailable"}
             {header.industry && ` · ${header.industry}`}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <div className="text-2xl font-semibold tabular-nums">
-              {header.latest_price.close === null
-                ? "—"
-                : `₹${header.latest_price.close.toFixed(2)}`}
-            </div>
-            {changePct !== null && (
-              <div className={changePct >= 0 ? "text-sm text-emerald-600" : "text-sm text-red-600"}>
-                {changePct >= 0 ? "+" : ""}
-                {changePct.toFixed(2)}%
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div className="hidden items-center gap-x-5 sm:flex">
+            {sessionStats.map((stat) => (
+              <div key={stat.label} className="text-right">
+                <div className="label-caps">{stat.label}</div>
+                <div className="num text-[13px]">{stat.value}</div>
               </div>
-            )}
+            ))}
           </div>
+
+          <div className="text-right">
+            <div className="num text-2xl leading-tight font-semibold">
+              {price(header.latest_price.close)}
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <Delta value={changePct} className="text-[13px]" />
+              <span className="text-[10px] text-muted-foreground">
+                {tradingDate(header.latest_price.date)}
+              </span>
+            </div>
+          </div>
+
           <ProvenanceBadge
             source={company.meta.source}
             asOf={company.meta.as_of}
@@ -96,39 +121,46 @@ export default async function CompanyPage({
         </div>
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium">Price</CardTitle>
-          <div className="flex gap-1">
-            {RANGES.map((r) => (
-              <Link
-                key={r}
-                href={`/company/${symbol}?range=${r}`}
-                className={`rounded px-2 py-1 text-xs ${
-                  r === range ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent"
-                }`}
-              >
-                {r}
-              </Link>
-            ))}
-          </div>
-        </CardHeader>
-        <CardContent>
+      {/* Chart gets the width; score rides alongside it on wide screens. */}
+      <div className="grid gap-3 xl:grid-cols-[1fr_320px]">
+        <Panel
+          title="Price"
+          actions={
+            <div className="flex gap-0.5">
+              {RANGES.map((r) => (
+                <Link
+                  key={r}
+                  href={`/company/${symbol}?range=${r}`}
+                  className={cn(
+                    "num rounded-sm px-2 py-0.5 text-[11px] transition-colors",
+                    r === range
+                      ? "bg-primary/20 font-medium text-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  )}
+                >
+                  {r.toUpperCase()}
+                </Link>
+              ))}
+            </div>
+          }
+          bodyClassName="p-2"
+        >
           <PriceChart
-            bars={prices.data}
+            bars={bars}
             technicals={technicals.data.series}
             corporateActions={corporateActions.data}
           />
-        </CardContent>
-      </Card>
+        </Panel>
 
-      <ScorePanel score={score.data} meta={score.meta} />
+        <ScorePanel score={score.data} meta={score.meta} />
+      </div>
 
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
 
-      <FundamentalsPanel fundamentals={fundamentals.data} meta={fundamentals.meta} />
-
-      <NewsPanel articles={news.data} meta={news.meta} />
+      <div className="grid gap-3 xl:grid-cols-[1fr_420px]">
+        <FundamentalsPanel fundamentals={fundamentals.data} meta={fundamentals.meta} />
+        <NewsPanel articles={news.data} meta={news.meta} />
+      </div>
     </main>
   );
 }

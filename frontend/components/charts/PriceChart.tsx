@@ -14,13 +14,19 @@ import {
 import { useEffect, useRef } from "react";
 
 import type { CorporateAction, PriceBar, TechnicalSeries } from "@/lib/api";
+import { useIsLightTheme } from "@/lib/use-theme";
 
 const DMA_LINES: { key: keyof TechnicalSeries; color: string; title: string }[] = [
-  { key: "dma20", color: "#60a5fa", title: "DMA 20" },
-  { key: "dma50", color: "#f59e0b", title: "DMA 50" },
-  { key: "dma100", color: "#a78bfa", title: "DMA 100" },
-  { key: "dma200", color: "#f87171", title: "DMA 200" },
+  { key: "dma20", color: "#38bdf8", title: "DMA 20" },
+  { key: "dma50", color: "#fbbf24", title: "DMA 50" },
+  { key: "dma100", color: "#c084fc", title: "DMA 100" },
+  { key: "dma200", color: "#fb7185", title: "DMA 200" },
 ];
+
+// Candle colours are fixed rather than themed: up/down is the one signal a
+// trader reads pre-attentively, and it must stay identical across themes.
+const UP = "#22c55e";
+const DOWN = "#ef4444";
 
 const ACTION_LABEL: Record<string, (a: CorporateAction) => string> = {
   split: (a) => `Split/bonus ${a.ratio ?? ""}x`,
@@ -66,6 +72,11 @@ export function PriceChart({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  // Chart colours are read out of CSS custom properties once, at build time
+  // — canvas can't participate in the cascade — so a theme switch has to
+  // rebuild the chart, or the axis text keeps the old theme's contrast and
+  // becomes unreadable (light-grey labels on the light palette's white).
+  const isLight = useIsLightTheme();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -73,30 +84,36 @@ export function PriceChart({
 
     const mutedForeground = cssVar("--muted-foreground");
     const border = cssVar("--border");
-    const muted = cssVar("--muted");
     const foreground = cssVar("--foreground");
 
     const chart = createChart(container, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: mutedForeground,
+        fontFamily: getComputedStyle(document.body).fontFamily,
+        fontSize: 11,
       },
       grid: {
-        vertLines: { color: border },
-        horzLines: { color: border },
+        vertLines: { color: border, style: 1 },
+        horzLines: { color: border, style: 1 },
       },
-      rightPriceScale: { borderColor: border },
-      timeScale: { borderColor: border },
+      crosshair: {
+        mode: 0,
+        vertLine: { color: mutedForeground, width: 1, style: 2, labelBackgroundColor: border },
+        horzLine: { color: mutedForeground, width: 1, style: 2, labelBackgroundColor: border },
+      },
+      rightPriceScale: { borderColor: border, scaleMargins: { top: 0.08, bottom: 0.25 } },
+      timeScale: { borderColor: border, rightOffset: 2 },
       autoSize: true,
     });
     chartRef.current = chart;
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#16a34a",
-      downColor: "#dc2626",
+      upColor: UP,
+      downColor: DOWN,
       borderVisible: false,
-      wickUpColor: "#16a34a",
-      wickDownColor: "#dc2626",
+      wickUpColor: UP,
+      wickDownColor: DOWN,
     });
     candleSeries.setData(
       bars.map((b) => ({
@@ -113,8 +130,17 @@ export function PriceChart({
       priceScaleId: "volume",
       color: mutedForeground,
     });
-    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-    volumeSeries.setData(bars.map((b) => ({ time: b.date as Time, value: b.volume, color: muted })));
+    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    volumeSeries.setData(
+      bars.map((b) => ({
+        time: b.date as Time,
+        value: b.volume,
+        // Tint volume by the session's own direction so a heavy down-day is
+        // distinguishable from a heavy up-day at a glance. Kept translucent
+        // so it stays subordinate to the candles.
+        color: b.close >= b.open ? `${UP}66` : `${DOWN}66`,
+      })),
+    );
 
     if (technicals) {
       for (const { key, color, title } of DMA_LINES) {
@@ -148,19 +174,31 @@ export function PriceChart({
       createSeriesMarkers(candleSeries, markers);
     }
 
-    // fitContent() alone was leaving ~110 empty logical slots to the left
-    // of a short (7-bar) series instead of stretching bar spacing to fill
-    // the container (verified live via logicalRange debugging — {from:
-    // -113, to: 6} for a 721px-wide, 7-bar chart). Setting the visible
-    // logical range explicitly to the real data span forces it to compute
-    // spacing that actually fills the width.
-    chart.timeScale().setVisibleLogicalRange({ from: 0, to: bars.length - 1 });
+    // Two distinct failure modes, both verified live, both fixed by pinning
+    // the logical range to the real data span instead of trusting
+    // fitContent():
+    //   1. fitContent() leaves ~110 empty logical slots to the left of a
+    //      short (7-bar) series rather than stretching bar spacing to fill
+    //      the container ({from: -113, to: 6} for a 721px-wide chart).
+    //   2. The chart computes bar spacing against whatever width the
+    //      container has when the series is set, then *preserves that
+    //      spacing* when the container later grows. Inside a grid/flex
+    //      layout the first measurement is narrower than the settled one,
+    //      so a 69-bar series ends up crammed into the right ~15% of a
+    //      full-width chart.
+    // Re-applying on every resize is what keeps (2) fixed rather than
+    // merely fixed-on-first-paint.
+    const fill = () => chart.timeScale().setVisibleLogicalRange({ from: 0, to: bars.length - 1 });
+    fill();
+    const observer = new ResizeObserver(fill);
+    observer.observe(container);
 
     return () => {
+      observer.disconnect();
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, technicals, corporateActions]);
+  }, [bars, technicals, corporateActions, isLight]);
 
   if (bars.length === 0) {
     return (
@@ -170,5 +208,5 @@ export function PriceChart({
     );
   }
 
-  return <div ref={containerRef} className="h-96 w-full" />;
+  return <div ref={containerRef} className="h-[420px] w-full" />;
 }

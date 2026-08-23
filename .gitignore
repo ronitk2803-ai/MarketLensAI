@@ -238,3 +238,6 @@ architecture/.DS_Store
 !frontend/lib/
 !frontend/build/
 !frontend/dist/
+
+# Claude Code local tool state (launch.json holds machine-specific paths)
+.claude/

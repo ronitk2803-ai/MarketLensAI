@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     # Shared secret gating /admin/* endpoints until a real auth system exists (P1).
     admin_token: str | None = None
 
+    # Runs app.jobs.daily_ingestion once a day in-process via APScheduler
+    # (Build_plan.md §Q MVP default). Off by default so importing app.main
+    # for tests, or running a second dev instance, doesn't fire an
+    # unattended batch job against the DB. Platforms without a
+    # guaranteed always-on process (serverless) should leave this off and
+    # trigger `python -m app.jobs.daily_ingestion` from a platform cron
+    # job instead — see architecture/claude/Deployment.md.
+    enable_scheduler: bool = False
+    daily_ingestion_hour_ist: int = 20
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

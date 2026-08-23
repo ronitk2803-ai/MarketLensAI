@@ -1,9 +1,11 @@
 import Link from "next/link";
 
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Delta } from "@/components/terminal/Delta";
+import { Panel } from "@/components/terminal/Panel";
 import { getOpportunities, getOpportunityScreens } from "@/lib/api";
+import { compact, num, price, scoreBarTone, scoreTone } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 // This is a static route (no [param] segment), so Next attempts to
 // prerender it at build time by default — which fails when the backend
@@ -16,25 +18,25 @@ export const dynamic = "force-dynamic";
 const METRIC_LABELS: Record<string, string> = {
   change_pct: "Change",
   pct_below: "Below avg",
-  relative_volume: "vs avg volume",
+  relative_volume: "Rel volume",
   close: "Close",
   dma: "Average",
-  period_days: "",
   volume: "Volume",
 };
 
-function formatMetric(key: string, value: number): string {
-  if (key === "change_pct" || key === "pct_below") return `${value.toFixed(1)}%`;
-  if (key === "relative_volume") return `${value.toFixed(1)}x`;
-  if (key === "close" || key === "dma") return `₹${value.toFixed(2)}`;
-  if (key === "volume") return value.toLocaleString("en-IN");
-  return value.toFixed(2);
-}
+// Screens expose different metric sets; this fixes the column order where
+// they overlap so the eye doesn't have to re-learn the table per screen.
+const METRIC_ORDER = ["close", "change_pct", "pct_below", "dma", "relative_volume", "volume"];
 
-function scoreColor(value: number): string {
-  if (value >= 66) return "text-emerald-600";
-  if (value >= 33) return "text-amber-600";
-  return "text-red-600";
+function MetricCell({ metricKey, value }: { metricKey: string; value: number | undefined }) {
+  if (typeof value !== "number") return <span className="num text-muted-foreground">—</span>;
+  if (metricKey === "change_pct" || metricKey === "pct_below") {
+    return <Delta value={metricKey === "pct_below" ? -value : value} digits={1} />;
+  }
+  if (metricKey === "relative_volume") return <span className="num">{num(value, 1)}x</span>;
+  if (metricKey === "close" || metricKey === "dma") return <span className="num">{price(value)}</span>;
+  if (metricKey === "volume") return <span className="num">{compact(value)}</span>;
+  return <span className="num">{num(value)}</span>;
 }
 
 export default async function OpportunitiesPage({
@@ -50,111 +52,148 @@ export default async function OpportunitiesPage({
 
   const result = activeScreen ? await getOpportunities(activeScreen) : null;
   const hits = result?.data ?? [];
-  const metricKeys = hits.length > 0 ? Object.keys(hits[0].metrics).filter((k) => k !== "period_days") : [];
+
+  // Union across all hits, not just hits[0] — a screen whose first row
+  // happens to omit a metric would otherwise drop that column for every row.
+  const presentKeys = new Set<string>();
+  for (const hit of hits) {
+    for (const key of Object.keys(hit.metrics)) {
+      if (key !== "period_days") presentKeys.add(key);
+    }
+  }
+  const metricKeys = [
+    ...METRIC_ORDER.filter((k) => presentKeys.has(k)),
+    ...[...presentKeys].filter((k) => !METRIC_ORDER.includes(k)).sort(),
+  ];
+
+  const scored = hits.filter((h) => typeof h.opportunity_score === "number");
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8">
+    <main className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 px-4 py-4">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Opportunity Finder</h1>
-        <p className="text-sm text-muted-foreground">
-          What deserves attention right now — screened against stored data, not a live scan.
-          Research candidates, not recommendations.
+        <h1 className="text-lg font-semibold tracking-tight">Screener</h1>
+        <p className="text-xs text-muted-foreground">
+          What deserves attention right now — screened against stored end-of-day data. Research
+          candidates, not recommendations.
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         {screens.map((s) => (
           <Link
             key={s.id}
             href={`/opportunities?screen=${s.id}`}
-            className={`rounded-full border px-3 py-1 text-sm ${
+            className={cn(
+              "rounded-sm border px-2.5 py-1 text-xs transition-colors",
               s.id === activeScreen
-                ? "border-foreground bg-accent font-medium"
-                : "text-muted-foreground hover:bg-accent"
-            }`}
+                ? "border-primary bg-primary/15 font-medium text-foreground"
+                : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+            )}
           >
             {s.label}
           </Link>
         ))}
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium">
-            {screens.find((s) => s.id === activeScreen)?.label ?? "Results"} · {hits.length} match
-            {hits.length === 1 ? "" : "es"}
-          </CardTitle>
-          {result && (
+      <Panel
+        title={
+          <div className="flex items-baseline gap-3">
+            <h2 className="label-caps">
+              {screens.find((s) => s.id === activeScreen)?.label ?? "Results"}
+            </h2>
+            <span className="num text-[11px] text-muted-foreground">
+              {hits.length} match{hits.length === 1 ? "" : "es"}
+              {scored.length !== hits.length && ` · ${scored.length} scored`}
+            </span>
+          </div>
+        }
+        actions={
+          result && (
             <ProvenanceBadge
               source={result.meta.source}
               asOf={result.meta.as_of}
               confidence={result.meta.confidence}
             />
-          )}
-        </CardHeader>
-        {hits.length > 0 && (
-          <p className="px-6 text-xs text-muted-foreground">
-            Ranked by Opportunity Score where available (Build_plan.md §K attention ranking) —
-            not just raw decline. A hit with no score yet falls after every ranked hit.
+          )
+        }
+        bodyClassName="p-0"
+        footnote="Ranked by Opportunity Score where available — attention-worthiness, not raw decline. Rows without a score yet sort after every scored row."
+      >
+        {hits.length === 0 ? (
+          <p className="px-3 py-10 text-center text-sm text-muted-foreground">
+            No matches right now — either nothing meets the threshold, or the universe
+            doesn&apos;t have enough price history yet.
           </p>
-        )}
-        <CardContent>
-          {hits.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No matches right now — either nothing meets the threshold, or the seeded universe
-              doesn&apos;t have enough price history yet.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="py-1.5 pr-4 font-normal">#</th>
-                    <th className="py-1.5 pr-4 font-normal">Symbol</th>
-                    <th className="py-1.5 pr-4 font-normal">Name</th>
-                    <th className="py-1.5 pr-4 font-normal">Opportunity Score</th>
-                    {metricKeys.map((key) => (
-                      <th key={key} className="py-1.5 pr-4 font-normal">
-                        {METRIC_LABELS[key] ?? key}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {hits.map((hit) => (
-                    <tr key={hit.symbol} className="border-b last:border-0">
-                      <td className="py-1.5 pr-4 text-muted-foreground tabular-nums">{hit.rank}</td>
-                      <td className="py-1.5 pr-4">
-                        <Link href={`/company/${hit.symbol}`} className="font-medium hover:underline">
-                          {hit.symbol}
-                        </Link>
-                        <Badge variant="outline" className="ml-2">
-                          {hit.exchange}
-                        </Badge>
-                      </td>
-                      <td className="py-1.5 pr-4 text-muted-foreground">{hit.name}</td>
-                      <td className="py-1.5 pr-4 tabular-nums">
-                        {hit.opportunity_score === null ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : (
-                          <span className={`font-medium ${scoreColor(hit.opportunity_score)}`}>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="border-b border-border bg-surface-raised/40">
+                  <th className="label-caps px-3 py-1.5 text-right">#</th>
+                  <th className="label-caps py-1.5 text-left">Symbol</th>
+                  {/* On a phone the name eats the width the numbers need,
+                      and the symbol already identifies the row. */}
+                  <th className="label-caps hidden py-1.5 text-left sm:table-cell">Company</th>
+                  <th className="label-caps py-1.5 pr-3 text-right">Score</th>
+                  {metricKeys.map((key) => (
+                    <th key={key} className="label-caps py-1.5 pr-3 text-right whitespace-nowrap">
+                      {METRIC_LABELS[key] ?? key}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {hits.map((hit) => (
+                  <tr
+                    key={hit.symbol}
+                    className="border-b border-border/50 last:border-0 hover:bg-accent/40"
+                  >
+                    <td className="num px-3 py-1.5 text-right text-muted-foreground">{hit.rank}</td>
+                    <td className="py-1.5">
+                      <Link
+                        href={`/company/${hit.symbol}`}
+                        className="num font-medium hover:text-primary hover:underline"
+                      >
+                        {hit.symbol}
+                      </Link>
+                    </td>
+                    <td className="hidden max-w-[18rem] truncate py-1.5 pr-3 text-muted-foreground sm:table-cell">
+                      {hit.name}
+                    </td>
+                    <td className="py-1.5 pr-3">
+                      {typeof hit.opportunity_score !== "number" ? (
+                        <span className="num block text-right text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="h-1 w-10 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className={cn("h-full", scoreBarTone(hit.opportunity_score))}
+                              style={{ width: `${hit.opportunity_score}%` }}
+                            />
+                          </div>
+                          <span
+                            className={cn(
+                              "num w-6 text-right font-medium",
+                              scoreTone(hit.opportunity_score),
+                            )}
+                          >
                             {hit.opportunity_score.toFixed(0)}
                           </span>
-                        )}
+                        </div>
+                      )}
+                    </td>
+                    {metricKeys.map((key) => (
+                      <td key={key} className="py-1.5 pr-3 text-right whitespace-nowrap">
+                        <MetricCell metricKey={key} value={hit.metrics[key]} />
                       </td>
-                      {metricKeys.map((key) => (
-                        <td key={key} className="py-1.5 pr-4 tabular-nums">
-                          {formatMetric(key, hit.metrics[key])}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
     </main>
   );
 }

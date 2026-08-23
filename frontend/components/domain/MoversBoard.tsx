@@ -1,0 +1,105 @@
+import Link from "next/link";
+
+import { Delta } from "@/components/terminal/Delta";
+import { Panel } from "@/components/terminal/Panel";
+import { compact, num, price, scoreTone } from "@/lib/format";
+import type { OpportunityHit } from "@/lib/api";
+
+/**
+ * Compact leaderboard of one screen's top hits — the home dashboard's unit.
+ * Screens carry different metric sets (the decline screens have
+ * close/change_pct; unusual_volume has volume/relative_volume and no price
+ * at all), so each row picks the two most meaningful figures it actually
+ * has rather than rendering dashes for columns that were never going to
+ * exist.
+ */
+function primaryFigures(hit: OpportunityHit) {
+  const m = hit.metrics;
+  if (typeof m.close === "number") {
+    return {
+      left: price(m.close),
+      right:
+        typeof m.change_pct === "number" ? (
+          <Delta value={m.change_pct} digits={1} />
+        ) : typeof m.pct_below === "number" ? (
+          <Delta value={-m.pct_below} digits={1} />
+        ) : null,
+    };
+  }
+  if (typeof m.relative_volume === "number") {
+    return {
+      left: compact(m.volume),
+      right: <span className="num text-foreground">{num(m.relative_volume, 1)}x</span>,
+    };
+  }
+  return { left: "", right: null };
+}
+export function MoversBoard({
+  title,
+  href,
+  hits,
+  limit = 6,
+}: {
+  title: string;
+  href: string;
+  hits: OpportunityHit[];
+  limit?: number;
+}) {
+  const rows = hits.slice(0, limit);
+
+  return (
+    <Panel
+      title={title}
+      actions={
+        <Link href={href} className="text-[11px] text-primary hover:underline">
+          View all
+        </Link>
+      }
+      bodyClassName="p-0"
+    >
+      {/* Flex rows rather than a table: `table-auto` sizes columns to their
+          content, so the company name refuses to truncate and pushes the
+          figures out of the panel instead. A flex row with `min-w-0` on the
+          label lets the numbers keep their intrinsic width and the name
+          absorb — and truncate into — whatever is left. */}
+      {rows.length === 0 ? (
+        <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+          No matches right now.
+        </p>
+      ) : (
+        <ul className="text-[13px]">
+          {rows.map((hit) => {
+            const figures = primaryFigures(hit);
+            return (
+              <li key={hit.symbol} className="border-b border-border/60 last:border-0">
+                <Link
+                  href={`/company/${hit.symbol}`}
+                  className="flex items-center gap-2 px-3 py-1.5 hover:bg-accent/40"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="num block truncate font-medium">{hit.symbol}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      {hit.name}
+                    </span>
+                  </span>
+                  <span className="num shrink-0 text-right whitespace-nowrap text-muted-foreground">
+                    {figures.left}
+                  </span>
+                  <span className="shrink-0 text-right whitespace-nowrap">{figures.right}</span>
+                  <span
+                    className={`num w-5 shrink-0 text-right text-[11px] ${scoreTone(hit.opportunity_score)}`}
+                    title="Opportunity Score"
+                  >
+                    {typeof hit.opportunity_score === "number"
+                      ? hit.opportunity_score.toFixed(0)
+                      : "—"}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Panel>
+  );
+}

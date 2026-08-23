@@ -102,3 +102,31 @@ def resolve_upstox_instrument_key(db: Session, asset: AssetRef) -> str:
             "upstox", f"no instrument_key mapped for {asset.exchange}:{asset.symbol}"
         )
     return row.provider_instrument_key
+
+
+if __name__ == "__main__":
+    # One-off/monthly universe (re)seed against a fresh DB (Build_plan.md §2:
+    # monthly cadence, not run from the daily job — see app/jobs/daily_ingestion.py).
+    # Upstox's instrument dump is public and unauthenticated, so this needs no
+    # access token. It seeds every NSE_EQ equity instrument in the dump
+    # (thousands), not a Nifty-500-filtered subset — no such filter exists in
+    # this codebase yet, so narrow it upstream (e.g. pre-filter `instruments`
+    # by a symbol list) if that's needed before running this in production.
+    import logging
+
+    from app.db.session import SessionLocal
+    from app.providers.india.upstox import fetch_instruments_raw, parse_equity_instruments
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    session = SessionLocal()
+    try:
+        raw = fetch_instruments_raw()
+        instruments = parse_equity_instruments(raw)
+        outcome = seed_assets_from_upstox_instruments(session, instruments)
+        session.commit()
+        logger.info("universe seed: %s", outcome)
+        print(outcome)
+    finally:
+        session.close()

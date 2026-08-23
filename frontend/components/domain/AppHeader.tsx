@@ -1,18 +1,33 @@
 import Link from "next/link";
 
 import { SearchBox } from "@/components/domain/SearchBox";
+import { NavLink } from "@/components/domain/NavLink";
+import { ThemeToggle } from "@/components/domain/ThemeToggle";
 
 export function AppHeader() {
   return (
-    <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3">
-        <Link href="/" className="text-lg font-semibold tracking-tight">
-          mlai
+    <header className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur">
+      {/* Below `sm` the search drops to its own row rather than competing
+          with the nav for width — hiding the nav instead would leave no way
+          to reach the screener on a phone. */}
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:h-12 sm:flex-nowrap sm:py-0">
+        <Link href="/" className="flex shrink-0 items-center gap-2">
+          <span className="grid size-6 place-items-center rounded-sm bg-primary text-[11px] font-bold text-primary-foreground">
+            M
+          </span>
+          <span className="text-sm font-semibold tracking-tight">mlai</span>
         </Link>
-        <Link href="/opportunities" className="text-sm text-muted-foreground hover:text-foreground">
-          Opportunities
-        </Link>
-        <SearchBox className="flex-1" />
+
+        <nav className="flex items-center gap-1">
+          <NavLink href="/">Markets</NavLink>
+          <NavLink href="/opportunities">Screener</NavLink>
+        </nav>
+
+        <ThemeToggle />
+
+        <div className="order-last w-full sm:order-none sm:ml-auto sm:max-w-md">
+          <SearchBox />
+        </div>
       </div>
     </header>
   );
