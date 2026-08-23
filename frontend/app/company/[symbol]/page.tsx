@@ -86,8 +86,12 @@ export default async function CompanyPage({
             <span className="truncate text-sm text-muted-foreground">{header.name}</span>
           </div>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {header.sector ?? "Sector unavailable"}
-            {header.industry && ` · ${header.industry}`}
+            {/* NSE's constituent CSV classifies each company at one level,
+                stored as industry. Keying the whole line off `sector` meant a
+                company with a known industry still read "Sector unavailable"
+                next to it. Show whichever levels we actually have. */}
+            {[header.sector, header.industry].filter(Boolean).join(" · ") ||
+              "Classification unavailable"}
           </p>
         </div>
 

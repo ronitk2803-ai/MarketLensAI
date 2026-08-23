@@ -6,11 +6,12 @@ upsert policy — providers stay DB-oblivious and receive a resolver callable
 instead (see app/providers/india/upstox.py).
 """
 
+import re
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, InstrumentMap
+from app.db.models import Asset, Company, Industry, InstrumentMap
 from app.domain.models import AssetRef
 from app.providers.errors import ProviderError
 from app.providers.india.nse_indices import IndexConstituent
@@ -29,6 +30,88 @@ class ReconcileResult:
     deactivated: int
     reactivated: int
     active_total: int
+
+
+@dataclass(frozen=True, slots=True)
+class IndustrySyncResult:
+    industries_created: int
+    companies_linked: int
+
+
+def industry_code(name: str) -> str:
+    """Stable slug for `Industry.code`, e.g. "Oil Gas & Consumable Fuels" ->
+    "oil-gas-consumable-fuels".
+
+    `code` is the join key `ScoreProfile.industry_code` keys off (§M), so it
+    has to stay stable across reseeds — deriving it from the name rather than
+    a row id means an industry keeps its identity even if the table is
+    rebuilt.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower())
+    return slug.strip("-")
+
+
+def sync_company_industries(
+    db: Session,
+    constituents: list[IndexConstituent],
+    *,
+    market: str = "IN",
+    exchange: str = "NSE",
+) -> IndustrySyncResult:
+    """Populate the `industry` taxonomy and link each `company` to it.
+
+    NSE's constituent CSV carries one classification level per company
+    (20 buckets across the Nifty 500: Financial Services, Healthcare, ...).
+    That is stored as `Industry` and linked via `company.industry_id`.
+
+    `company.sector` is deliberately left alone: NSE gives a single level
+    here, and copying the same string into both fields would invent a
+    sector/industry distinction the source does not actually make — the
+    "never fabricate, show what we have" rule that governs every other
+    field (Build_plan.md §7/§H, decision D-002).
+    """
+    by_code: dict[str, Industry] = {
+        row.code: row for row in db.query(Industry)
+    }
+    industries_created = 0
+    for name in sorted({c.industry for c in constituents if c.industry}):
+        code = industry_code(name)
+        if code not in by_code:
+            industry = Industry(code=code, name=name)
+            db.add(industry)
+            by_code[code] = industry
+            industries_created += 1
+    db.flush()
+
+    assets = db.query(Asset).filter_by(market=market, exchange=exchange).all()
+    by_isin = {a.isin: a for a in assets if a.isin}
+    by_symbol = {a.symbol: a for a in assets}
+
+    existing_companies = {c.asset_id: c for c in db.query(Company)}
+    companies_linked = 0
+    for constituent in constituents:
+        if not constituent.industry:
+            continue
+        asset = (
+            by_isin.get(constituent.isin) if constituent.isin else None
+        ) or by_symbol.get(constituent.symbol)
+        if asset is None:
+            continue
+
+        industry = by_code[industry_code(constituent.industry)]
+        company = existing_companies.get(asset.id)
+        if company is None:
+            company = Company(asset_id=asset.id, industry_id=industry.id)
+            db.add(company)
+            existing_companies[asset.id] = company
+        else:
+            company.industry_id = industry.id
+        companies_linked += 1
+
+    db.flush()
+    return IndustrySyncResult(
+        industries_created=industries_created, companies_linked=companies_linked
+    )
 
 
 def filter_to_index(
@@ -232,9 +315,11 @@ if __name__ == "__main__":
 
             outcome = seed_assets_from_upstox_instruments(session, scoped)
             reconciled = reconcile_active_universe(session, members)
+            industries = sync_company_industries(session, members)
             session.commit()
             logger.info("universe seed (%s): %s", args.index, outcome)
             logger.info("universe reconcile: %s", reconciled)
-            print(outcome, reconciled)
+            logger.info("industry sync: %s", industries)
+            print(outcome, reconciled, industries)
     finally:
         session.close()

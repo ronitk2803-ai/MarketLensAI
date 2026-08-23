@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, InstrumentMap
+from app.db.models import Asset, Company, Industry, InstrumentMap
 from app.domain.models import AssetRef
 from app.providers.errors import ProviderError
 from app.providers.india.nse_indices import IndexConstituent
@@ -10,9 +10,11 @@ from app.services.universe import (
     SeedResult,
     classify_asset_class,
     filter_to_index,
+    industry_code,
     reconcile_active_universe,
     resolve_upstox_instrument_key,
     seed_assets_from_upstox_instruments,
+    sync_company_industries,
 )
 
 INSTRUMENTS = [
@@ -171,3 +173,87 @@ def test_reconcile_preserves_the_deactivated_assets_row(db: Session) -> None:
 
     still_there = db.query(Asset).filter_by(id=before).one_or_none()
     assert still_there is not None
+
+
+def _constituent_with_industry(symbol: str, isin: str | None, industry: str) -> IndexConstituent:
+    return IndexConstituent(
+        symbol=symbol, name=f"{symbol} Ltd.", industry=industry, isin=isin, series="EQ"
+    )
+
+
+def test_industry_code_slugifies_nse_names() -> None:
+    assert industry_code("Financial Services") == "financial-services"
+    assert industry_code("Oil Gas & Consumable Fuels") == "oil-gas-consumable-fuels"
+    assert industry_code("Metals & Mining") == "metals-mining"
+
+
+def test_sync_creates_industries_and_links_companies(db: Session) -> None:
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    members = [
+        _constituent_with_industry("ZZTEST1", "INE002A01018", "Financial Services"),
+        _constituent_with_industry("ZZTEST2", "INE467B01029", "Information Technology"),
+    ]
+
+    result = sync_company_industries(db, members)
+
+    assert result.companies_linked == 2
+    asset = db.query(Asset).filter_by(market="IN", exchange="NSE", symbol="ZZTEST1").one()
+    company = db.query(Company).filter_by(asset_id=asset.id).one()
+    assert company.industry is not None
+    assert company.industry.name == "Financial Services"
+    assert company.industry.code == "financial-services"
+
+
+def test_sync_reuses_an_existing_industry_row(db: Session) -> None:
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    members = [
+        _constituent_with_industry("ZZTEST1", "INE002A01018", "Financial Services"),
+        _constituent_with_industry("ZZTEST2", "INE467B01029", "Financial Services"),
+    ]
+
+    sync_company_industries(db, members)
+    before = db.query(Industry).filter_by(code="financial-services").count()
+    # Re-running the monthly seed must not duplicate the taxonomy.
+    sync_company_industries(db, members)
+
+    assert before == 1
+    assert db.query(Industry).filter_by(code="financial-services").count() == 1
+
+
+def test_sync_moves_a_company_that_was_reclassified(db: Session) -> None:
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    asset = db.query(Asset).filter_by(market="IN", exchange="NSE", symbol="ZZTEST1").one()
+
+    sync_company_industries(
+        db, [_constituent_with_industry("ZZTEST1", "INE002A01018", "Services")]
+    )
+    sync_company_industries(
+        db, [_constituent_with_industry("ZZTEST1", "INE002A01018", "Capital Goods")]
+    )
+
+    company = db.query(Company).filter_by(asset_id=asset.id).one()
+    assert company.industry is not None
+    assert company.industry.name == "Capital Goods"
+
+
+def test_sync_leaves_sector_null_rather_than_duplicating_industry(db: Session) -> None:
+    # NSE gives one classification level; writing it into both fields would
+    # invent a distinction the source does not make.
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    asset = db.query(Asset).filter_by(market="IN", exchange="NSE", symbol="ZZTEST1").one()
+
+    sync_company_industries(
+        db, [_constituent_with_industry("ZZTEST1", "INE002A01018", "Healthcare")]
+    )
+
+    company = db.query(Company).filter_by(asset_id=asset.id).one()
+    assert company.sector is None
+    assert company.industry is not None and company.industry.name == "Healthcare"
+
+
+def test_sync_ignores_constituents_with_no_matching_asset(db: Session) -> None:
+    result = sync_company_industries(
+        db, [_constituent_with_industry("ZZNOSUCHASSET", "INE999Z01099", "Power")]
+    )
+
+    assert result.companies_linked == 0
