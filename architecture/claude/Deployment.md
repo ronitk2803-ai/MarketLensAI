@@ -20,6 +20,53 @@ configured origin, both scheduling modes, and both CLI entrypoints):
 
 ---
 
+## 0. Run the whole thing locally first (no accounts needed)
+
+[docker-compose.prod.yml](../../docker-compose.prod.yml) runs the full
+stack — Postgres, backend, frontend — in containers on your own machine.
+This is the fastest way to see the real product, and it exercises the same
+images the hosted deploy uses.
+
+```bash
+podman compose -f docker-compose.prod.yml up -d --build
+```
+
+Frontend on <http://localhost:3100>, backend on <http://localhost:8000>.
+It is deliberately isolated from the dev `docker-compose.yml`: its own
+project name, its own volume, Postgres on 5433 instead of 5432. Bringing it
+up will not touch your dev database. (The explicit `name:` in that file is
+what guarantees this — without it, compose derives the project name from the
+directory, both files collide, and the dev Postgres container gets recreated
+against the prod volume.)
+
+Then seed it — a fresh database has no universe and no prices, so every page
+is empty until you do:
+
+```bash
+podman compose -f docker-compose.prod.yml exec backend python -m app.services.universe
+```
+```bash
+podman compose -f docker-compose.prod.yml exec backend python -m app.jobs.backfill_history --days 365
+```
+
+The first pulls Upstox's public instrument dump (no token needed; ~2,643 NSE
+instruments). The second backfills a year of end-of-day prices from NSE
+Bhavcopy in committed monthly chunks — ~567k bars in under five minutes.
+Screens and charts work as soon as this finishes.
+
+Scores are the slow part: each asset needs a live fundamentals fetch, so the
+full universe takes roughly 1.5 hours at ~2.5s per asset. The nightly job
+does this on its own; to populate it immediately, run
+`python -m app.jobs.daily_ingestion`. Until scores exist the screener still
+works — it ranks scored rows first and shows `–` for the rest, by design.
+
+To tear it down (`-v` also deletes the prod database volume):
+```bash
+podman compose -f docker-compose.prod.yml down
+```
+
+---
+
 ## 1. Database — Supabase or Neon
 
 Either works; both give a managed Postgres with a connection string. Pick
@@ -64,6 +111,15 @@ whichever account you'd rather have.
    Build_plan.md §2 to pick up new listings — it's not part of the daily
    job on purpose (see the docstring in
    [daily_ingestion.py](../../backend/app/jobs/daily_ingestion.py)).
+6. Backfill price history, or the charts and every moving-average screen
+   start empty and stay that way until enough daily runs accumulate:
+   ```bash
+   DATABASE_URL="...same string as above..." \
+     .venv/bin/python -m app.jobs.backfill_history --days 365
+   ```
+   Chunked and committed per month on purpose — `backfill_universe_from_
+   bhavcopy` holds a whole run in one transaction, which is right for the
+   daily 10-day delta and wrong for a year across 2.6k symbols.
 
 ---
 
