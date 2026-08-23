@@ -12,6 +12,12 @@ class DownOverPeriod(Screen):
         self.period_days = period_days
         self.min_decline_pct = min_decline_pct
 
+    @property
+    def required_bars(self) -> int:
+        # Compares bars[-1] against bars[-(period_days + 1)], and `evaluate`
+        # skips anything with len(bars) <= period_days.
+        return self.period_days + 1
+
     def evaluate(self, universe: dict[AssetRef, list[Bar]]) -> list[Hit]:
         hits = []
         for asset, bars in universe.items():
@@ -43,6 +49,12 @@ class BelowDMA(Screen):
     def __init__(self, screen_id: str, *, dma_period: int) -> None:
         self.screen_id = screen_id
         self.dma_period = dma_period
+
+    @property
+    def required_bars(self) -> int:
+        # sma() yields None until it has a full window, so the latest value
+        # only exists once there are dma_period bars.
+        return self.dma_period
 
     def evaluate(self, universe: dict[AssetRef, list[Bar]]) -> list[Hit]:
         hits = []
@@ -79,6 +91,12 @@ class UnusualVolume(Screen):
         self.screen_id = screen_id
         self.window = window
         self.min_multiplier = min_multiplier
+
+    @property
+    def required_bars(self) -> int:
+        # relative_volume compares day i against the `window` days before it,
+        # so the newest value needs window + 1 bars.
+        return self.window + 1
 
     def evaluate(self, universe: dict[AssetRef, list[Bar]]) -> list[Hit]:
         hits = []

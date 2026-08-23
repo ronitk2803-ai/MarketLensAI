@@ -100,3 +100,28 @@ def test_screens_handle_empty_universe() -> None:
     assert DownOverPeriod("x", period_days=5, min_decline_pct=1.0).evaluate({}) == []
     assert BelowDMA("y", dma_period=5).evaluate({}) == []
     assert UnusualVolume("z").evaluate({}) == []
+
+
+def test_every_registered_screen_declares_enough_history_to_ever_match() -> None:
+    """Guards against a screen being listed in the UI but mathematically dead.
+
+    below_dma100 and below_dma200 shipped this way: run_screen defaulted to a
+    flat 120 *calendar* days (~82 trading sessions) while sma() needs a full
+    window before it returns anything, so both screens returned zero hits
+    forever regardless of the market. Verified live against a fully
+    backfilled universe at the time: below_dma50 -> 1137 hits,
+    below_dma100 -> 0, below_dma200 -> 0.
+    """
+    from app.engines.opportunity.registry import SCREENS
+    from app.services.opportunities import calendar_lookback_for
+
+    # NSE trades ~246 sessions a year; a calendar window yields ~0.67x that.
+    trading_days_per_calendar_day = 246 / 365
+
+    for screen_id, screen in SCREENS.items():
+        lookback = calendar_lookback_for(screen.required_bars)
+        sessions_available = lookback * trading_days_per_calendar_day
+        assert sessions_available >= screen.required_bars, (
+            f"{screen_id} needs {screen.required_bars} sessions but its "
+            f"{lookback}-calendar-day window only yields ~{sessions_available:.0f}"
+        )

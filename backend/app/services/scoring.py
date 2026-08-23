@@ -76,7 +76,17 @@ def _gather_inputs(db: Session, asset: Asset) -> ScoreInputs:
 
 
 def _todays_score(db: Session, asset_id: int, profile_id: int) -> Score | None:
-    today_start = dt.datetime.combine(dt.date.today(), dt.time.min, tzinfo=dt.UTC)
+    # "Today" must be measured on the same clock that stamps Score.as_of,
+    # which is the database's (server_default=func.now(), UTC). Using
+    # dt.date.today() here read the *server's local* date instead, so on any
+    # host east of UTC the two disagreed for part of every day: on this
+    # IST machine at 00:12 IST the cutoff became 2026-08-24T00:00Z while the
+    # row just written carried 2026-08-23T18:42Z, so the lookup missed its
+    # own score and every request recomputed — re-fetching fundamentals from
+    # Yahoo each time, for the whole 00:00–05:30 IST window.
+    today_start = dt.datetime.combine(
+        dt.datetime.now(dt.UTC).date(), dt.time.min, tzinfo=dt.UTC
+    )
     return (
         db.query(Score)
         .filter(

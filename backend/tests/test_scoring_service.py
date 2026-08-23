@@ -1,4 +1,5 @@
 import datetime as dt
+from decimal import Decimal
 
 import pytest
 from sqlalchemy.orm import Session
@@ -165,3 +166,70 @@ def test_scores_are_append_only_across_days(db: Session) -> None:
     rows = db.query(Score).filter_by(asset_id=asset.id).all()
     assert len(rows) == 2
     assert score.as_of > yesterday
+
+
+def test_todays_score_boundary_is_measured_in_utc_not_server_local_time(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the clock that defines "today" for the score cache.
+
+    Score.as_of is stamped by Postgres (server_default=func.now(), UTC).
+    Deriving the cutoff from the *server local* date instead made the two
+    disagree on any host whose date differs from UTC's for part of the day —
+    on IST, every request between 00:00 and 05:30 local missed the cache and
+    recomputed, re-fetching fundamentals from Yahoo each time.
+
+    The TZ is forced to one guaranteed to disagree with UTC *right now*
+    (east of UTC when it is late in the UTC day, west of it when it is
+    early), so this fails on the buggy implementation whatever time the
+    suite happens to run — rather than only during the window that first
+    exposed it.
+    """
+    import os
+    import time as time_module
+
+    from app.services.scoring import _todays_score
+
+    utc_now = dt.datetime.now(dt.UTC)
+    # UTC+14 rolls local past midnight late in the UTC day; UTC-11 holds
+    # local on the previous date early in it. Either way local date != UTC
+    # date, which is the condition the bug needs to show itself.
+    forced_tz = "Etc/GMT-14" if utc_now.hour >= 10 else "Etc/GMT+11"
+    monkeypatch.setitem(os.environ, "TZ", forced_tz)
+    time_module.tzset()
+    try:
+        assert dt.date.today() != utc_now.date(), "TZ setup failed to diverge from UTC"
+
+        asset = _make_asset(db, "ZZSCORETZ")
+        profile = get_active_profile(db)
+        utc_day_start = dt.datetime.combine(utc_now.date(), dt.time.min, tzinfo=dt.UTC)
+
+        stale = Score(
+            asset_id=asset.id,
+            profile_id=profile.id,
+            value=None,
+            coverage=Decimal("0"),
+            confidence="low",
+            as_of=utc_day_start - dt.timedelta(seconds=1),
+        )
+        db.add(stale)
+        db.flush()
+        assert _todays_score(db, asset.id, profile.id) is None
+
+        current = Score(
+            asset_id=asset.id,
+            profile_id=profile.id,
+            value=None,
+            coverage=Decimal("0"),
+            confidence="low",
+            as_of=utc_day_start + dt.timedelta(seconds=1),
+        )
+        db.add(current)
+        db.flush()
+        found = _todays_score(db, asset.id, profile.id)
+        assert found is not None and found.id == current.id
+    finally:
+        # monkeypatch restores the env var, but the C-level tz cache needs an
+        # explicit reset or every later test inherits the forced zone.
+        monkeypatch.undo()
+        time_module.tzset()

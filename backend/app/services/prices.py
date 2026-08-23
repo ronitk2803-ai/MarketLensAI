@@ -52,11 +52,32 @@ def row_to_bar(row: PriceOHLCV) -> Bar:
 
 
 def persist_bars(db: Session, asset_id: int, bars: list[Bar], source: str) -> None:
+    if not bars:
+        return
+
+    # One SELECT for this asset's overlapping rows, not one per bar. The
+    # per-bar lookup was an N+1: tolerable for the ~300-asset dev universe
+    # (~21k queries) but fatal against the real 2.6k-asset NSE universe,
+    # where a one-year backfill became ~650k sequential round trips and
+    # effectively never finished (observed live: Postgres idle, Python
+    # pegged, no progress after 25 minutes).
+    existing: dict[dt.date, PriceOHLCV] = {
+        row.date: row
+        for row in db.query(PriceOHLCV).filter(
+            PriceOHLCV.asset_id == asset_id,
+            PriceOHLCV.date.in_([bar.date for bar in bars]),
+        )
+    }
+
     for bar in bars:
-        row = db.query(PriceOHLCV).filter_by(asset_id=asset_id, date=bar.date).one_or_none()
+        row = existing.get(bar.date)
         if row is None:
             row = PriceOHLCV(asset_id=asset_id, date=bar.date, source=source)
             db.add(row)
+            # Keep the map authoritative so a repeated date within `bars`
+            # updates the pending row instead of inserting a duplicate —
+            # the old code got this via autoflush on the per-bar query.
+            existing[bar.date] = row
         row.open = Decimal(str(bar.open))
         row.high = Decimal(str(bar.high))
         row.low = Decimal(str(bar.low))

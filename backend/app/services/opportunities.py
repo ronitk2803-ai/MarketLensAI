@@ -56,10 +56,32 @@ def _load_universe_bars(db: Session, lookback_days: int) -> dict[AssetRef, list[
     return universe
 
 
-def run_screen(db: Session, screen_id: str, *, lookback_days: int = 120) -> list[Hit]:
+# NSE trades ~246 days a year, so a calendar window is only ~0.67 as many
+# sessions. Converting with the inverse of that, plus a margin for the way
+# holidays cluster (Diwali, year-end), keeps a screen from being starved of
+# the sessions it needs at the exact moment it matters.
+_TRADING_DAYS_PER_YEAR = 246
+_CALENDAR_PER_TRADING_DAY = 365 / _TRADING_DAYS_PER_YEAR
+_LOOKBACK_MARGIN_DAYS = 10
+
+
+def calendar_lookback_for(required_bars: int) -> int:
+    """Calendar days to request in order to get `required_bars` sessions."""
+    return int(required_bars * _CALENDAR_PER_TRADING_DAY) + _LOOKBACK_MARGIN_DAYS
+
+
+def run_screen(db: Session, screen_id: str, *, lookback_days: int | None = None) -> list[Hit]:
     screen = SCREENS.get(screen_id)
     if screen is None:
         raise ValueError(f"unknown screen: {screen_id!r}")
+    # Sized from the screen's own requirement rather than a flat default.
+    # The old 120-calendar-day default is only ~82 sessions, so below_dma100
+    # and below_dma200 were listed in the UI but could never return a hit —
+    # sma() stays None until its window is full (verified live against a
+    # fully backfilled universe: 1137 hits for below_dma50, 0 for both of
+    # the others).
+    if lookback_days is None:
+        lookback_days = calendar_lookback_for(screen.required_bars)
     universe = _load_universe_bars(db, lookback_days)
     return screen.evaluate(universe)
 
@@ -94,7 +116,9 @@ def _load_stored_scores(
     return result
 
 
-def run_ranked_screen(db: Session, screen_id: str, *, lookback_days: int = 120) -> list[RankedHit]:
+def run_ranked_screen(
+    db: Session, screen_id: str, *, lookback_days: int | None = None
+) -> list[RankedHit]:
     """Layer 1 + Layer 2 (Build_plan.md §K): screens for candidates, then
     re-ranks by Opportunity Score so a hit with weak fundamentals doesn't
     outrank one with stable fundamentals just because it fell further."""

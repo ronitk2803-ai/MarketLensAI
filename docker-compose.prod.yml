@@ -1,0 +1,89 @@
+# Full local production stack: Postgres + backend + frontend, all containerized.
+#
+# Deliberately separate from docker-compose.yml (which only runs the dev
+# Postgres this repo has been developed against): its own volume, its own
+# ports, its own database. Bringing this up must never disturb the dev data.
+#
+# The explicit `name:` below is load-bearing, not cosmetic. Compose derives
+# the project name from the directory when it isn't set, so without this both
+# files resolve to project "ronrack" and share a namespace — the first run of
+# this stack tore down and recreated the dev `ronrack-postgres-1` container,
+# repointing it at the prod volume. The dev volume survived (volumes outlive
+# containers) but the dev database was effectively swapped out underneath the
+# running app. A distinct project name keeps the two stacks fully isolated.
+name: ronrack-prod
+#
+#   podman-compose -f docker-compose.prod.yml up -d --build
+#   → frontend on http://localhost:3100, backend on http://localhost:8000
+#
+# First boot only, once the stack is healthy — the universe has to exist
+# before anything renders:
+#   podman-compose -f docker-compose.prod.yml exec backend \
+#     python -m app.services.universe
+#   podman-compose -f docker-compose.prod.yml exec backend \
+#     python -m app.jobs.daily_ingestion
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mlai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlai}
+      POSTGRES_DB: mlai
+    # 5433 on the host so this never collides with the dev Postgres on 5432.
+    ports:
+      - "5433:5432"
+    volumes:
+      - mlai_prod_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+psycopg://mlai:${POSTGRES_PASSWORD:-mlai}@postgres:5432/mlai
+      CORS_ORIGINS: http://localhost:3100
+      # This compose runs exactly one always-on backend, so the in-process
+      # scheduler (Deployment.md §6 Option A) is the right choice here.
+      ENABLE_SCHEDULER: "true"
+      DAILY_INGESTION_HOUR_IST: "20"
+      # Optional — the app runs without them, falling back to the auth-free
+      # NSE Bhavcopy spine. Set them in a .env beside this file to enable
+      # Upstox, and see Deployment.md §5 for the daily re-auth.
+      UPSTOX_API_KEY: ${UPSTOX_API_KEY:-}
+      UPSTOX_API_SECRET: ${UPSTOX_API_SECRET:-}
+      UPSTOX_REDIRECT_URI: ${UPSTOX_REDIRECT_URI:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      # Server-side only — the browser never calls the backend directly
+      # (app/api/search/route.ts is a BFF proxy), so this resolves over the
+      # compose network, not from the host.
+      API_BASE_URL: http://backend:8000/api/v1
+    ports:
+      - "3100:3000"
+
+volumes:
+  mlai_prod_pgdata:
