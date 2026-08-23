@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { Delta } from "@/components/terminal/Delta";
 import { Panel } from "@/components/terminal/Panel";
+import { Sparkline } from "@/components/terminal/Sparkline";
 import { compact, num, price, scoreTone } from "@/lib/format";
 import type { OpportunityHit } from "@/lib/api";
 
@@ -76,12 +77,18 @@ export function MoversBoard({
                   href={`/company/${hit.symbol}`}
                   className="flex items-center gap-2 px-3 py-1.5 hover:bg-accent/40"
                 >
+                  {/* The ticker is the row's identifier, so it must never be
+                      the thing that gives way — at the 4-up xl layout the
+                      panel is only ~300px and a shared truncate turned
+                      GMRAIRPORT into "GMRAIR…". The symbol now sets the
+                      column's floor and the company name absorbs instead. */}
                   <span className="min-w-0 flex-1">
-                    <span className="num block truncate font-medium">{hit.symbol}</span>
+                    <span className="num block font-medium whitespace-nowrap">{hit.symbol}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">
                       {hit.name}
                     </span>
                   </span>
+                  <Sparkline values={hit.spark} width={40} className="hidden sm:block" />
                   <span className="num shrink-0 text-right whitespace-nowrap text-muted-foreground">
                     {figures.left}
                   </span>

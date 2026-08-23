@@ -5,7 +5,11 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset, CorporateAction, PriceOHLCV
-from app.services.opportunities import run_ranked_screen, run_screen
+from app.services.opportunities import (
+    run_ranked_screen,
+    run_ranked_screen_with_sparklines,
+    run_screen,
+)
 
 
 def _add_bars(db: Session, asset: Asset, closes: list[float]) -> None:
@@ -166,3 +170,80 @@ def test_run_ranked_screen_handles_hits_with_no_score_yet(db: Session) -> None:
 
     hit = next(r for r in ranked if r.hit.asset.symbol == "ZZRANKC")
     assert hit.opportunity_score is None
+
+
+def test_sparklines_are_returned_per_hit_oldest_first(db: Session) -> None:
+    asset = Asset(symbol="ZZSPARK1", exchange="NSE", market="IN", name="Spark Co")
+    db.add(asset)
+    db.flush()
+    closes = [100.0] * 10 + [70.0]
+    _add_bars(db, asset, closes)
+
+    result = run_ranked_screen_with_sparklines(db, "down_10d")
+
+    spark = result.sparklines["ZZSPARK1"]
+    assert spark == closes  # oldest first, and the decline is the last point
+    assert spark[-1] == 70.0
+
+
+def test_sparklines_are_capped_to_the_requested_sessions(db: Session) -> None:
+    asset = Asset(symbol="ZZSPARK2", exchange="NSE", market="IN", name="Long Co")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 40 + [70.0])
+
+    result = run_ranked_screen_with_sparklines(db, "down_10d", sessions=5)
+
+    assert len(result.sparklines["ZZSPARK2"]) == 5
+
+
+def test_short_window_screens_still_get_a_full_length_sparkline(db: Session) -> None:
+    """down_5d only needs 6 sessions to evaluate.
+
+    Sizing the load off the screen alone would hand this row a 6-point stub
+    while below_dma200 got a full month, so the loader takes the max of the
+    screen's requirement and the sparkline length.
+    """
+    asset = Asset(symbol="ZZSPARK3", exchange="NSE", market="IN", name="Short Window Co")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 40 + [70.0])
+
+    result = run_ranked_screen_with_sparklines(db, "down_5d", sessions=30)
+
+    assert len(result.sparklines["ZZSPARK3"]) == 30
+
+
+def test_sparklines_use_corporate_action_adjusted_closes(db: Session) -> None:
+    """The sparkline must not draw a cliff the split created.
+
+    Raw closes here are 200 for six sessions, then a 2:1 split, then a real
+    decline from 100 to 70. Unadjusted that renders as a 65% collapse; the
+    honest picture is a flat stretch followed by a 30% fall. Same
+    "a split must not look like a crash" guarantee as the screens
+    (Build_plan.md D-007) — the series is drawn, so it has to hold there too.
+    """
+    asset = Asset(symbol="ZZSPARK4", exchange="NSE", market="IN", name="Split Co")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [200.0] * 6 + [100.0, 90.0, 80.0, 75.0, 70.0])
+    db.add(
+        CorporateAction(
+            asset_id=asset.id,
+            ex_date=dt.date.today() - dt.timedelta(days=4),
+            # Lowercase: ADJUSTABLE_ACTION_TYPES is {"split", "bonus"}.
+            type="split",
+            ratio=Decimal("2"),
+            source="test",
+        )
+    )
+    db.flush()
+
+    result = run_ranked_screen_with_sparklines(db, "down_10d")
+
+    spark = result.sparklines["ZZSPARK4"]
+    # Pre-split closes halved to 100, so the series never shows the 200 -> 100
+    # mechanical step, only the genuine 100 -> 70 decline.
+    assert spark[0] == 100.0
+    assert spark[-1] == 70.0
+    assert max(spark) == 100.0

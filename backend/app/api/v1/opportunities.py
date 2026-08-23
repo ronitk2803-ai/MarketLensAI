@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.engines.opportunity.registry import SCREEN_LABELS, SCREENS
-from app.services.opportunities import run_ranked_screen
+from app.services.opportunities import run_ranked_screen_with_sparklines
 
 router = APIRouter(tags=["opportunities"])
 
@@ -36,7 +36,7 @@ def get_opportunities(
     if screen not in SCREENS:
         raise HTTPException(status_code=400, detail=f"unknown screen: {screen!r}")
 
-    ranked = run_ranked_screen(db, screen)
+    result = run_ranked_screen_with_sparklines(db, screen)
     data = [
         {
             "symbol": r.hit.asset.symbol,
@@ -46,7 +46,11 @@ def get_opportunities(
             "metrics": r.hit.metrics,
             "rank": r.rank,
             "opportunity_score": r.opportunity_score,
+            # Trailing closes for the row's sparkline. Comes free off the
+            # bars the screen already loaded and adjusted, so it costs no
+            # extra query.
+            "spark": result.sparklines.get(r.hit.asset.symbol, []),
         }
-        for r in ranked
+        for r in result.ranked
     ]
     return _envelope(data, source="db", confidence="high" if data else "low")

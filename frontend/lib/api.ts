@@ -184,6 +184,8 @@ export interface OpportunityHit {
   metrics: Record<string, number>;
   rank: number;
   opportunity_score: number | null;
+  /** Trailing ~30 sessions of corporate-action-adjusted closes, oldest first. */
+  spark: number[];
 }
 
 export function getOpportunities(screen: string) {

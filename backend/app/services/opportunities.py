@@ -6,6 +6,7 @@ would turn one screen run into N live calls, defeating the point).
 """
 
 import datetime as dt
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
@@ -70,7 +71,25 @@ def calendar_lookback_for(required_bars: int) -> int:
     return int(required_bars * _CALENDAR_PER_TRADING_DAY) + _LOOKBACK_MARGIN_DAYS
 
 
-def run_screen(db: Session, screen_id: str, *, lookback_days: int | None = None) -> list[Hit]:
+# Sessions of closing price behind each hit's sparkline. 30 is about a
+# trading month — enough to read the shape that produced the hit without
+# making the payload compete with the numbers beside it.
+SPARKLINE_SESSIONS = 30
+
+
+def _evaluate(
+    db: Session,
+    screen_id: str,
+    *,
+    lookback_days: int | None = None,
+    min_bars: int = 0,
+) -> tuple[list[Hit], dict[AssetRef, list[Bar]]]:
+    """Run one screen and hand back the universe it ran against.
+
+    Callers that need the underlying series (sparklines) would otherwise
+    have to re-query and re-adjust every hit's bars, which is the same work
+    the screen just did.
+    """
     screen = SCREENS.get(screen_id)
     if screen is None:
         raise ValueError(f"unknown screen: {screen_id!r}")
@@ -81,9 +100,14 @@ def run_screen(db: Session, screen_id: str, *, lookback_days: int | None = None)
     # fully backfilled universe: 1137 hits for below_dma50, 0 for both of
     # the others).
     if lookback_days is None:
-        lookback_days = calendar_lookback_for(screen.required_bars)
+        lookback_days = calendar_lookback_for(max(screen.required_bars, min_bars))
     universe = _load_universe_bars(db, lookback_days)
-    return screen.evaluate(universe)
+    return screen.evaluate(universe), universe
+
+
+def run_screen(db: Session, screen_id: str, *, lookback_days: int | None = None) -> list[Hit]:
+    hits, _ = _evaluate(db, screen_id, lookback_days=lookback_days)
+    return hits
 
 
 def _load_stored_scores(
@@ -125,3 +149,36 @@ def run_ranked_screen(
     hits = run_screen(db, screen_id, lookback_days=lookback_days)
     scores = _load_stored_scores(db, {h.asset for h in hits})
     return apply_attention_ranking(hits, scores)
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenOutput:
+    ranked: list[RankedHit]
+    # symbol -> trailing closes, oldest first. Corporate-action adjusted,
+    # because they come from the same bars the screen ran on: an unadjusted
+    # split would draw a cliff that never happened.
+    sparklines: dict[str, list[float]]
+
+
+def run_ranked_screen_with_sparklines(
+    db: Session, screen_id: str, *, sessions: int = SPARKLINE_SESSIONS
+) -> ScreenOutput:
+    """`run_ranked_screen` plus a short closing series per hit.
+
+    Loads `max(screen requirement, sessions)` of history so every screen can
+    draw the same length of sparkline — down_5d only needs 6 sessions to
+    evaluate, which would otherwise render a 6-point stub next to
+    below_dma200's full month.
+    """
+    hits, universe = _evaluate(db, screen_id, min_bars=sessions)
+    scores = _load_stored_scores(db, {h.asset for h in hits})
+    ranked = apply_attention_ranking(hits, scores)
+
+    bars_by_symbol = {ref.symbol: bars for ref, bars in universe.items()}
+    sparklines = {
+        r.hit.asset.symbol: [
+            round(bar.close, 2) for bar in bars_by_symbol.get(r.hit.asset.symbol, [])[-sessions:]
+        ]
+        for r in ranked
+    }
+    return ScreenOutput(ranked=ranked, sparklines=sparklines)
