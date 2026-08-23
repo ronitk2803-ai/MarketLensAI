@@ -36,6 +36,11 @@ select = ["E", "F", "I", "UP", "B"]
 # footgun the rule targets elsewhere.
 ignore = ["B008"]
 
+[tool.ruff.lint.per-file-ignores]
+# Raw RSS/XML fixtures mirror real feed content verbatim for fidelity —
+# wrapping them would just be cosmetic noise, not a readability win.
+"tests/test_google_news.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true

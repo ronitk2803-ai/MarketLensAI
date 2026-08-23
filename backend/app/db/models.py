@@ -198,3 +198,27 @@ class CorporateAction(Base):
     fetched_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class NewsArticle(Base):
+    """Deduplicated news (Build_plan.md §8/§14). `sentiment`/`event_type`/
+    `relevance` are P1/P2 classification enrichments (FinBERT/LLM) — left
+    NULL for now rather than guessed; this table only does fetch + dedup."""
+
+    __tablename__ = "news_article"
+    __table_args__ = (UniqueConstraint("dedup_hash", name="uq_news_article_dedup_hash"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("asset.id"), index=True)
+    url: Mapped[str]
+    source: Mapped[str]
+    published_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    title: Mapped[str]
+    summary: Mapped[str | None]
+    sentiment: Mapped[str | None]
+    event_type: Mapped[str | None]
+    relevance: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    dedup_hash: Mapped[str]
+    fetched_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

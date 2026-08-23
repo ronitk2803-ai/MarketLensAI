@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { PriceChart } from "@/components/charts/PriceChart";
 import { FundamentalsPanel } from "@/components/domain/FundamentalsPanel";
+import { NewsPanel } from "@/components/domain/NewsPanel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,7 @@ import {
   getCompany,
   getCorporateActions,
   getFundamentals,
+  getNews,
   getPrices,
   getTechnicals,
   type PriceRange,
@@ -44,11 +46,12 @@ export default async function CompanyPage({
     throw error;
   }
 
-  const [prices, technicals, corporateActions, fundamentals] = await Promise.all([
+  const [prices, technicals, corporateActions, fundamentals, news] = await Promise.all([
     getPrices(symbol, range),
     getTechnicals(symbol, range),
     getCorporateActions(symbol),
     getFundamentals(symbol),
+    getNews(symbol),
   ]);
 
   const header = company.data;
@@ -119,6 +122,8 @@ export default async function CompanyPage({
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
 
       <FundamentalsPanel fundamentals={fundamentals.data} meta={fundamentals.meta} />
+
+      <NewsPanel articles={news.data} meta={news.meta} />
     </main>
   );
 }

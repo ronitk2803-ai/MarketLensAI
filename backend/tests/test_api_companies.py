@@ -7,12 +7,18 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Asset, Company, Industry
 from app.db.session import get_db
-from app.domain.models import Bar
+from app.domain.models import AssetRef, Bar, Ratios
 from app.main import app
+from app.providers.india.google_news import GoogleNewsProvider
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
+from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
 
 client = TestClient(app)
+
+
+def _empty_ratios() -> Ratios:
+    return Ratios(asset=AssetRef(symbol="X", exchange="NSE"), as_of=dt.date.today(), values={})
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +50,11 @@ def _stub_external_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         YFinanceCorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
     )
+    monkeypatch.setattr(
+        YFinanceFundamentalDataProvider, "get_ratios", lambda *a, **k: _empty_ratios()
+    )
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_all_statements", lambda *a, **k: [])
+    monkeypatch.setattr(GoogleNewsProvider, "get_news", lambda *a, **k: [])
 
 
 @pytest.fixture
@@ -161,3 +172,92 @@ def test_get_technicals_returns_snapshot_and_series(seeded_asset: Asset) -> None
     # Only 2 bars seeded -> DMA20 needs 20, must gracefully be null, not fabricated.
     assert body["data"]["latest"]["dma20"] is None
     assert len(body["data"]["series"]["close"]) == 2
+
+
+def test_get_fundamentals_returns_ratios_and_statements(
+    seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.models import Statements
+
+    monkeypatch.setattr(
+        YFinanceFundamentalDataProvider,
+        "get_ratios",
+        lambda *a, **k: Ratios(
+            asset=AssetRef(symbol="ZZAPI1", exchange="NSE"),
+            as_of=dt.date.today(),
+            values={"debtToEquity": 36.65},
+        ),
+    )
+    monkeypatch.setattr(
+        YFinanceFundamentalDataProvider,
+        "get_all_statements",
+        lambda *a, **k: [
+            Statements(
+                asset=AssetRef(symbol="ZZAPI1", exchange="NSE"),
+                period_type="FY",
+                period_end=dt.date(2026, 3, 31),
+                statement_type="income",
+                line_items={"totalRevenue": 100.0, "netIncome": 10.0},
+            )
+        ],
+    )
+
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/fundamentals")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["ratios"] == [
+        {
+            "metric": "debtToEquity",
+            "value": 36.65,
+            "source": "yfinance_fundamentals",
+            "confidence": "low",
+        }
+    ]
+    assert body["data"]["income_statement"][0]["line_items"] == {
+        "totalRevenue": 100.0,
+        "netIncome": 10.0,
+    }
+    assert body["meta"]["confidence"] == "low"
+
+
+def test_get_fundamentals_404_for_unknown_symbol() -> None:
+    response = client.get("/api/v1/companies/NOSUCHSYMBOL/fundamentals")
+    assert response.status_code == 404
+
+
+def test_get_news_returns_articles(seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.domain.models import Article
+
+    monkeypatch.setattr(
+        GoogleNewsProvider,
+        "get_news",
+        lambda *a, **k: [
+            Article(
+                url="https://example.com/story",
+                source="Test Source",
+                published_at=dt.datetime.now(dt.UTC),
+                title="Test Story",
+                dedup_hash="hash-1",
+            )
+        ],
+    )
+
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/news")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["data"]) == 1
+    assert body["data"][0]["title"] == "Test Story"
+    assert body["meta"]["confidence"] == "high"
+
+
+def test_get_news_empty_when_none_found(seeded_asset: Asset) -> None:
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/news")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"] == []
+    assert body["meta"]["confidence"] == "low"
+
+
+def test_get_news_404_for_unknown_symbol() -> None:
+    response = client.get("/api/v1/companies/NOSUCHSYMBOL/news")
+    assert response.status_code == 404

@@ -152,6 +152,19 @@ export function getFundamentals(symbol: string) {
   });
 }
 
+export interface NewsItem {
+  url: string;
+  source: string;
+  published_at: string;
+  title: string;
+}
+
+export function getNews(symbol: string) {
+  return apiFetch<NewsItem[]>(`/companies/${encodeURIComponent(symbol)}/news`, {
+    next: { revalidate: 300 },
+  });
+}
+
 export function getTechnicals(symbol: string, range: PriceRange = "1y") {
   return apiFetch<Technicals>(`/companies/${encodeURIComponent(symbol)}/technicals?range=${range}`, {
     next: { revalidate: 60 },

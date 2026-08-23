@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.services.adjusted_prices import get_adjusted_bars
 from app.services.corporate_actions import get_or_fetch_corporate_actions
 from app.services.fundamentals import get_or_fetch_ratios, get_or_fetch_statements
+from app.services.news import get_or_fetch_news
 from app.services.search import search_assets
 from app.services.technicals import compute_technicals
 
@@ -162,6 +163,22 @@ def get_fundamentals(symbol: str, db: Session = Depends(get_db)) -> dict:
     # uncross-checked (Build_plan.md §6/§H) — finding data doesn't earn it
     # more trust than the source itself has.
     return _envelope(data, source="yfinance_fundamentals", confidence="low")
+
+
+@router.get("/companies/{symbol}/news")
+def get_news(symbol: str, db: Session = Depends(get_db)) -> dict:
+    asset = _get_asset_or_404(db, symbol)
+    articles = get_or_fetch_news(db, asset)
+    data = [
+        {
+            "url": a.url,
+            "source": a.source,
+            "published_at": a.published_at,
+            "title": a.title,
+        }
+        for a in articles
+    ]
+    return _envelope(data, source="google_news", confidence="high" if data else "low")
 
 
 @router.get("/companies/{symbol}/technicals")
