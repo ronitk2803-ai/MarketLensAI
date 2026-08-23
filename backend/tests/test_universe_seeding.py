@@ -4,10 +4,13 @@ from sqlalchemy.orm import Session
 from app.db.models import Asset, InstrumentMap
 from app.domain.models import AssetRef
 from app.providers.errors import ProviderError
+from app.providers.india.nse_indices import IndexConstituent
 from app.providers.india.upstox import UpstoxInstrument
 from app.services.universe import (
     SeedResult,
     classify_asset_class,
+    filter_to_index,
+    reconcile_active_universe,
     resolve_upstox_instrument_key,
     seed_assets_from_upstox_instruments,
 )
@@ -93,3 +96,78 @@ def test_seed_classifies_etf_by_isin_prefix(db: Session) -> None:
     etf = db.query(Asset).filter_by(symbol="ZZETF1").one()
     assert equity.asset_class == "EQUITY"
     assert etf.asset_class == "ETF"
+
+
+def _constituent(symbol: str, isin: str | None) -> IndexConstituent:
+    return IndexConstituent(
+        symbol=symbol, name=f"{symbol} Ltd.", industry="Test", isin=isin, series="EQ"
+    )
+
+
+def test_filter_to_index_matches_on_isin() -> None:
+    members = [_constituent("RENAMED", "INE002A01018")]
+
+    scoped = filter_to_index(INSTRUMENTS, members)
+
+    # ISIN wins over symbol: the constituent list has since renamed the
+    # ticker but it is the same instrument, and dropping it would silently
+    # shrink the universe on every rename.
+    assert [i.trading_symbol for i in scoped] == ["ZZTEST1"]
+
+
+def test_filter_to_index_falls_back_to_symbol_when_isin_is_blank() -> None:
+    members = [_constituent("ZZTEST2", None)]
+
+    scoped = filter_to_index(INSTRUMENTS, members)
+
+    assert [i.trading_symbol for i in scoped] == ["ZZTEST2"]
+
+
+def test_filter_to_index_excludes_instruments_outside_the_index() -> None:
+    members = [_constituent("ZZTEST1", "INE002A01018")]
+
+    scoped = filter_to_index(INSTRUMENTS, members)
+
+    assert len(scoped) == 1
+    assert scoped[0].trading_symbol == "ZZTEST1"
+
+
+def test_reconcile_deactivates_assets_that_left_the_index(db: Session) -> None:
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+
+    # Only the first is still a member.
+    result = reconcile_active_universe(db, [_constituent("ZZTEST1", "INE002A01018")])
+
+    kept = db.query(Asset).filter_by(market="IN", exchange="NSE", symbol="ZZTEST1").one()
+    dropped = db.query(Asset).filter_by(market="IN", exchange="NSE", symbol="ZZTEST2").one()
+    assert kept.active is True
+    assert dropped.active is False
+    assert result.deactivated >= 1
+
+
+def test_reconcile_reactivates_a_returning_constituent(db: Session) -> None:
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    asset = db.query(Asset).filter_by(market="IN", exchange="NSE", symbol="ZZTEST2").one()
+    asset.active = False
+    db.flush()
+
+    result = reconcile_active_universe(
+        db,
+        [_constituent("ZZTEST1", "INE002A01018"), _constituent("ZZTEST2", "INE467B01029")],
+    )
+
+    db.refresh(asset)
+    assert asset.active is True
+    assert result.reactivated >= 1
+
+
+def test_reconcile_preserves_the_deactivated_assets_row(db: Session) -> None:
+    # Deactivation must never delete: price history and stored scores have
+    # to survive a rebalance so the stock can come back cheaply.
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    before = db.query(Asset).filter_by(market="IN", exchange="NSE", symbol="ZZTEST2").one().id
+
+    reconcile_active_universe(db, [_constituent("ZZTEST1", "INE002A01018")])
+
+    still_there = db.query(Asset).filter_by(id=before).one_or_none()
+    assert still_there is not None

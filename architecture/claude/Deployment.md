@@ -49,14 +49,17 @@ podman compose -f docker-compose.prod.yml exec backend python -m app.services.un
 podman compose -f docker-compose.prod.yml exec backend python -m app.jobs.backfill_history --days 365
 ```
 
-The first pulls Upstox's public instrument dump (no token needed; ~2,643 NSE
-instruments). The second backfills a year of end-of-day prices from NSE
-Bhavcopy in committed monthly chunks — ~567k bars in under five minutes.
-Screens and charts work as soon as this finishes.
+The first defines the universe: it takes NSE's Nifty 500 constituent CSV as
+the membership list and Upstox's public instrument dump (no token needed)
+for the instrument keys, seeding the 500 members and marking everything else
+inactive. Pass `--index all` to seed the full ~2,643-instrument tradable list
+instead. The second backfills a year of end-of-day prices from NSE Bhavcopy
+in committed monthly chunks. Screens and charts work as soon as it finishes.
 
-Scores are the slow part: each asset needs a live fundamentals fetch, so the
-full universe takes roughly 1.5 hours at ~2.5s per asset. The nightly job
-does this on its own; to populate it immediately, run
+Scores are the slow part: each asset needs a live fundamentals fetch at
+~2.5s, so the Nifty 500 takes ~20 minutes (the unfiltered universe would be
+~1.5 hours — the main reason the filter matters operationally). The nightly
+job does this on its own; to populate it immediately, run
 `python -m app.jobs.daily_ingestion`. Until scores exist the screener still
 works — it ranks scored rows first and shows `–` for the rest, by design.
 
@@ -101,15 +104,21 @@ whichever account you'd rather have.
    ```bash
    DATABASE_URL="...same string as above..." .venv/bin/python -m app.services.universe
    ```
-   This pulls Upstox's public instrument dump (no token needed) and upserts
-   every NSE equity into `asset`/`instrument_map` — **verified live from
-   inside the built container: 2,643 instruments**, classified by ISIN
-   prefix into 2,296 EQUITY and 347 ETF. Note this is the whole NSE_EQ
-   segment, not a Nifty-500-filtered subset (no such filter exists in this
-   codebase yet). Without this step,
-   `/opportunities` and search come back empty. Re-run monthly per
-   Build_plan.md §2 to pick up new listings — it's not part of the daily
-   job on purpose (see the docstring in
+   Membership comes from NSE's `ind_nifty500list.csv` (API_Sources.md §2's
+   designated primary source) and the instrument keys from Upstox's public
+   instrument dump; neither needs a token. **Verified live: all 500
+   constituents matched against the 2,643-instrument dump, nothing
+   unmatched**, and all 500 classify as EQUITY — the index carries no ETFs.
+
+   Assets that are not constituents are marked **inactive rather than
+   deleted**, so their price history and stored scores survive a rebalance
+   and cost nothing to restore. Search, company pages, and screens all
+   filter on `active`, so deactivation removes them from the product
+   completely. Pass `--index all` to seed the full tradable list instead.
+
+   Without this step, `/opportunities` and search come back empty. Re-run
+   **monthly** per API_Sources.md §2 to track rebalances — it is not part of
+   the daily job on purpose (see the docstring in
    [daily_ingestion.py](../../backend/app/jobs/daily_ingestion.py)).
 6. Backfill price history, or the charts and every moving-average screen
    start empty and stay that way until enough daily runs accumulate:
