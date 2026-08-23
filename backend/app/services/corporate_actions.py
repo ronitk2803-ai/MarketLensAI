@@ -54,28 +54,33 @@ def ingest_corporate_actions(
     return IngestResult(created=created, updated=updated, total=len(events))
 
 
+def get_stored_corporate_actions(db: Session, asset_id: int) -> list[CorporateActionEvent]:
+    """Pure DB read, no fetch — for callers (like the opportunity screener)
+    that must never trigger a live provider call per asset (Build_plan.md
+    §K: screens "run entirely against stored data, no live API storms")."""
+    rows = (
+        db.query(CorporateAction).filter_by(asset_id=asset_id).order_by(CorporateAction.ex_date).all()
+    )
+    return [
+        CorporateActionEvent(
+            type=row.type,
+            ex_date=row.ex_date,
+            ratio=float(row.ratio) if row.ratio is not None else None,
+            amount=float(row.amount) if row.amount is not None else None,
+        )
+        for row in rows
+    ]
+
+
 def get_or_fetch_corporate_actions(db: Session, asset: Asset) -> list[CorporateActionEvent]:
     """Reads stored `corporate_action` rows; on first request for an asset
     (none stored yet), fetches once from the yfinance fallback and persists
     them, so a fresh company page still gets adjusted prices without
     depending on a separate ingestion job having already run — and every
     later request for the same asset reads from the DB instead of Yahoo."""
-    rows = (
-        db.query(CorporateAction)
-        .filter_by(asset_id=asset.id)
-        .order_by(CorporateAction.ex_date)
-        .all()
-    )
+    rows = get_stored_corporate_actions(db, asset.id)
     if rows:
-        return [
-            CorporateActionEvent(
-                type=row.type,
-                ex_date=row.ex_date,
-                ratio=float(row.ratio) if row.ratio is not None else None,
-                amount=float(row.amount) if row.amount is not None else None,
-            )
-            for row in rows
-        ]
+        return rows
 
     asset_ref = AssetRef(symbol=asset.symbol, exchange=asset.exchange, market=asset.market)
     try:

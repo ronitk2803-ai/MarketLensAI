@@ -23,6 +23,18 @@ class SeedResult:
     total: int
 
 
+def classify_asset_class(isin: str | None) -> str:
+    """Indian ISIN prefix convention: INE = listed equity, INF = mutual
+    fund/ETF unit. Upstox's NSE_EQ|EQ segment mixes both (verified live: an
+    ETF's unit consolidation isn't a "stock split" our corporate-actions
+    source tracks the same way, so an unclassified ETF can look like a
+    mechanical crash in price screens) — this is the reliable signal to
+    tell them apart, not a name-pattern guess."""
+    if isin and isin.startswith("INF"):
+        return "ETF"
+    return "EQUITY"
+
+
 def seed_assets_from_upstox_instruments(
     db: Session, instruments: list[UpstoxInstrument]
 ) -> SeedResult:
@@ -34,6 +46,7 @@ def seed_assets_from_upstox_instruments(
             .filter_by(market="IN", exchange=instrument.exchange, symbol=instrument.trading_symbol)
             .one_or_none()
         )
+        asset_class = classify_asset_class(instrument.isin)
         if asset is None:
             asset = Asset(
                 symbol=instrument.trading_symbol,
@@ -41,6 +54,7 @@ def seed_assets_from_upstox_instruments(
                 market="IN",
                 name=instrument.name,
                 isin=instrument.isin,
+                asset_class=asset_class,
             )
             db.add(asset)
             db.flush()
@@ -48,6 +62,7 @@ def seed_assets_from_upstox_instruments(
         else:
             asset.name = instrument.name
             asset.isin = instrument.isin
+            asset.asset_class = asset_class
             updated += 1
 
         mapping = (

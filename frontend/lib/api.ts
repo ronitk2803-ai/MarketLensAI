@@ -165,6 +165,31 @@ export function getNews(symbol: string) {
   });
 }
 
+export interface OpportunityScreen {
+  id: string;
+  label: string;
+}
+
+export function getOpportunityScreens() {
+  return apiFetch<OpportunityScreen[]>("/opportunities/screens", {
+    next: { revalidate: 3600 },
+  });
+}
+
+export interface OpportunityHit {
+  symbol: string;
+  exchange: string;
+  name: string;
+  screen_id: string;
+  metrics: Record<string, number>;
+}
+
+export function getOpportunities(screen: string) {
+  return apiFetch<OpportunityHit[]>(`/opportunities?screen=${encodeURIComponent(screen)}`, {
+    next: { revalidate: 900 },
+  });
+}
+
 export function getTechnicals(symbol: string, range: PriceRange = "1y") {
   return apiFetch<Technicals>(`/companies/${encodeURIComponent(symbol)}/technicals?range=${range}`, {
     next: { revalidate: 60 },

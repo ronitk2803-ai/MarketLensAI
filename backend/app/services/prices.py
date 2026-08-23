@@ -37,7 +37,7 @@ def _stored_bars(db: Session, asset_id: int, start: dt.date, end: dt.date) -> li
     )
 
 
-def _row_to_bar(row: PriceOHLCV) -> Bar:
+def row_to_bar(row: PriceOHLCV) -> Bar:
     return Bar(
         date=row.date,
         open=float(row.open),
@@ -51,7 +51,7 @@ def _row_to_bar(row: PriceOHLCV) -> Bar:
     )
 
 
-def _persist_bars(db: Session, asset_id: int, bars: list[Bar], source: str) -> None:
+def persist_bars(db: Session, asset_id: int, bars: list[Bar], source: str) -> None:
     for bar in bars:
         row = db.query(PriceOHLCV).filter_by(asset_id=asset_id, date=bar.date).one_or_none()
         if row is None:
@@ -155,8 +155,8 @@ def get_price_history(
         )
 
         if bars and fetched_source:
-            _persist_bars(db, asset.id, bars, fetched_source)
+            persist_bars(db, asset.id, bars, fetched_source)
             stored = _stored_bars(db, asset.id, start, end)
             source = fetched_source
 
-    return [_row_to_bar(row) for row in stored], source
+    return [row_to_bar(row) for row in stored], source

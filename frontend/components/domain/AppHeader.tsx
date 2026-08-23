@@ -9,6 +9,9 @@ export function AppHeader() {
         <Link href="/" className="text-lg font-semibold tracking-tight">
           mlai
         </Link>
+        <Link href="/opportunities" className="text-sm text-muted-foreground hover:text-foreground">
+          Opportunities
+        </Link>
         <SearchBox className="flex-1" />
       </div>
     </header>
