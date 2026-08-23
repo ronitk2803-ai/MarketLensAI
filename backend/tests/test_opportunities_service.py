@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset, CorporateAction, PriceOHLCV
-from app.services.opportunities import run_screen
+from app.services.opportunities import run_ranked_screen, run_screen
 
 
 def _add_bars(db: Session, asset: Asset, closes: list[float]) -> None:
@@ -117,3 +117,52 @@ def test_run_screen_uses_corporate_action_adjusted_bars(db: Session) -> None:
     hits = run_screen(db, "down_10d", lookback_days=60)
 
     assert "ZZOPP4" not in {h.asset.symbol for h in hits}
+
+
+def _add_score(db: Session, asset: Asset, value: float, coverage: float = 1.0) -> None:
+    from app.db.models import Score, ScoreProfile
+
+    profile = db.query(ScoreProfile).filter_by(industry_code="default").first()
+    if profile is None:
+        profile = ScoreProfile(industry_code="default", version=1, weights={"x": 1.0})
+        db.add(profile)
+        db.flush()
+    db.add(
+        Score(
+            asset_id=asset.id,
+            profile_id=profile.id,
+            value=Decimal(str(value)),
+            coverage=Decimal(str(coverage)),
+            confidence="high",
+        )
+    )
+    db.flush()
+
+
+def test_run_ranked_screen_reorders_by_opportunity_score(db: Session) -> None:
+    """The founder_vision.md scenario, end to end through the service."""
+    stock_a = Asset(symbol="ZZRANKA", exchange="NSE", market="IN", name="Weak Fundamentals Co")
+    stock_b = Asset(symbol="ZZRANKB", exchange="NSE", market="IN", name="Stable Fundamentals Co")
+    db.add_all([stock_a, stock_b])
+    db.flush()
+    _add_bars(db, stock_a, [100.0] * 10 + [70.0])  # -30%
+    _add_bars(db, stock_b, [100.0] * 10 + [78.0])  # -22%
+    _add_score(db, stock_a, 25.0)
+    _add_score(db, stock_b, 75.0)
+
+    ranked = run_ranked_screen(db, "down_10d", lookback_days=60)
+
+    symbols = [r.hit.asset.symbol for r in ranked]
+    assert symbols.index("ZZRANKB") < symbols.index("ZZRANKA")
+
+
+def test_run_ranked_screen_handles_hits_with_no_score_yet(db: Session) -> None:
+    down = Asset(symbol="ZZRANKC", exchange="NSE", market="IN", name="Unscored Co")
+    db.add(down)
+    db.flush()
+    _add_bars(db, down, [100.0] * 10 + [70.0])
+
+    ranked = run_ranked_screen(db, "down_10d", lookback_days=60)
+
+    hit = next(r for r in ranked if r.hit.asset.symbol == "ZZRANKC")
+    assert hit.opportunity_score is None

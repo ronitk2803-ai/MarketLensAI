@@ -182,6 +182,8 @@ export interface OpportunityHit {
   name: string;
   screen_id: string;
   metrics: Record<string, number>;
+  rank: number;
+  opportunity_score: number | null;
 }
 
 export function getOpportunities(screen: string) {

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.engines.opportunity.registry import SCREEN_LABELS, SCREENS
-from app.services.opportunities import run_screen
+from app.services.opportunities import run_ranked_screen
 
 router = APIRouter(tags=["opportunities"])
 
@@ -36,15 +36,17 @@ def get_opportunities(
     if screen not in SCREENS:
         raise HTTPException(status_code=400, detail=f"unknown screen: {screen!r}")
 
-    hits = run_screen(db, screen)
+    ranked = run_ranked_screen(db, screen)
     data = [
         {
-            "symbol": h.asset.symbol,
-            "exchange": h.asset.exchange,
-            "name": h.asset.name,
-            "screen_id": h.screen_id,
-            "metrics": h.metrics,
+            "symbol": r.hit.asset.symbol,
+            "exchange": r.hit.asset.exchange,
+            "name": r.hit.asset.name,
+            "screen_id": r.hit.screen_id,
+            "metrics": r.hit.metrics,
+            "rank": r.rank,
+            "opportunity_score": r.opportunity_score,
         }
-        for h in hits
+        for r in ranked
     ]
     return _envelope(data, source="db", confidence="high" if data else "low")

@@ -31,6 +31,12 @@ function formatMetric(key: string, value: number): string {
   return value.toFixed(2);
 }
 
+function scoreColor(value: number): string {
+  if (value >= 66) return "text-emerald-600";
+  if (value >= 33) return "text-amber-600";
+  return "text-red-600";
+}
+
 export default async function OpportunitiesPage({
   searchParams,
 }: {
@@ -86,6 +92,12 @@ export default async function OpportunitiesPage({
             />
           )}
         </CardHeader>
+        {hits.length > 0 && (
+          <p className="px-6 text-xs text-muted-foreground">
+            Ranked by Opportunity Score where available (Build_plan.md §K attention ranking) —
+            not just raw decline. A hit with no score yet falls after every ranked hit.
+          </p>
+        )}
         <CardContent>
           {hits.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -97,8 +109,10 @@ export default async function OpportunitiesPage({
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-xs text-muted-foreground">
+                    <th className="py-1.5 pr-4 font-normal">#</th>
                     <th className="py-1.5 pr-4 font-normal">Symbol</th>
                     <th className="py-1.5 pr-4 font-normal">Name</th>
+                    <th className="py-1.5 pr-4 font-normal">Opportunity Score</th>
                     {metricKeys.map((key) => (
                       <th key={key} className="py-1.5 pr-4 font-normal">
                         {METRIC_LABELS[key] ?? key}
@@ -109,6 +123,7 @@ export default async function OpportunitiesPage({
                 <tbody>
                   {hits.map((hit) => (
                     <tr key={hit.symbol} className="border-b last:border-0">
+                      <td className="py-1.5 pr-4 text-muted-foreground tabular-nums">{hit.rank}</td>
                       <td className="py-1.5 pr-4">
                         <Link href={`/company/${hit.symbol}`} className="font-medium hover:underline">
                           {hit.symbol}
@@ -118,6 +133,15 @@ export default async function OpportunitiesPage({
                         </Badge>
                       </td>
                       <td className="py-1.5 pr-4 text-muted-foreground">{hit.name}</td>
+                      <td className="py-1.5 pr-4 tabular-nums">
+                        {hit.opportunity_score === null ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <span className={`font-medium ${scoreColor(hit.opportunity_score)}`}>
+                            {hit.opportunity_score.toFixed(0)}
+                          </span>
+                        )}
+                      </td>
                       {metricKeys.map((key) => (
                         <td key={key} className="py-1.5 pr-4 tabular-nums">
                           {formatMetric(key, hit.metrics[key])}
