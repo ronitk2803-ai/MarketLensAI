@@ -31,6 +31,10 @@ extend-exclude = ["migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI's DI system idiomatically uses Depends(...)/Query(...) as
+# argument defaults — this is the intended pattern, not the mutable-default
+# footgun the rule targets elsewhere.
+ignore = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
