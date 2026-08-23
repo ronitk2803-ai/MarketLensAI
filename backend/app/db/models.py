@@ -117,6 +117,24 @@ class PriceOHLCV(Base):
     )
 
 
+class ProviderFetchLog(Base):
+    """Every external provider call, for caching/freshness + provider-health monitoring (§X.5)."""
+
+    __tablename__ = "provider_fetch_log"
+    __table_args__ = (Index("ix_provider_fetch_log_provider_fetched_at", "provider", "fetched_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str]
+    endpoint: Mapped[str]
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("asset.id"), index=True)
+    status: Mapped[str]  # "success" | "error"
+    latency_ms: Mapped[int | None]
+    ttl_seconds: Mapped[int | None]
+    fetched_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class CorporateAction(Base):
     """Splits/bonus/dividends/rights — drives price adjustment (correctness-critical, D-007)."""
 
