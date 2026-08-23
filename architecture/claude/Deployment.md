@@ -5,9 +5,14 @@ Fly.io** (backend) + **Supabase or Neon** (Postgres) + scheduled daily
 ingestion. This doc covers everything after the code is ready: creating
 accounts, wiring env vars, running migrations, and confirming it's alive.
 
-Code-side prerequisites (already done, verified locally):
+Code-side prerequisites (already done, and verified by actually building and
+running the image against a throwaway Postgres — migrations from an empty
+schema, API serving, admin gate returning 401, CORS honouring only the
+configured origin, both scheduling modes, and both CLI entrypoints):
 - [backend/Dockerfile](../../backend/Dockerfile) — multi-stage `uv` build, runs
-  `alembic upgrade head` then `uvicorn` on container start.
+  `alembic upgrade head` then `uvicorn` on container start. Final image is
+  ~217 MB and runs as a non-root `mlai` user; `tests/` and `.env` are
+  excluded via `.dockerignore`.
 - [backend/app/jobs/daily_ingestion.py](../../backend/app/jobs/daily_ingestion.py)
   — the daily job (prices → corporate actions → scores).
 - In-process scheduler wired into [backend/app/main.py](../../backend/app/main.py)'s
@@ -50,9 +55,11 @@ whichever account you'd rather have.
    DATABASE_URL="...same string as above..." .venv/bin/python -m app.services.universe
    ```
    This pulls Upstox's public instrument dump (no token needed) and upserts
-   every NSE equity into `asset`/`instrument_map` — **verified live: 2,643
-   instruments** as of this writing, not a Nifty-500-filtered subset (no
-   such filter exists in this codebase yet). Without this step,
+   every NSE equity into `asset`/`instrument_map` — **verified live from
+   inside the built container: 2,643 instruments**, classified by ISIN
+   prefix into 2,296 EQUITY and 347 ETF. Note this is the whole NSE_EQ
+   segment, not a Nifty-500-filtered subset (no such filter exists in this
+   codebase yet). Without this step,
    `/opportunities` and search come back empty. Re-run monthly per
    Build_plan.md §2 to pick up new listings — it's not part of the daily
    job on purpose (see the docstring in
@@ -174,6 +181,15 @@ MVP per the original refusal to automate credential entry.
 
 ## 6. Scheduled ingestion — two options
 
+Whichever you pick, confirm it in the logs — application logging is
+explicitly configured ([app/core/logging.py](../../backend/app/core/logging.py))
+because uvicorn only sets up its own `uvicorn.*` loggers and leaves root at
+WARNING, which silently swallowed everything this app logs, including the
+job's per-asset error handling. With Option A you should see an
+`apscheduler.scheduler Scheduler started` line plus
+`daily_ingestion scheduled for 20:00 Asia/Kolkata` at boot; if those are
+absent, the scheduler is not running.
+
 **Option A (default, already wired): in-process APScheduler.**
 Set `ENABLE_SCHEDULER=true` (done in §2). Runs
 `app.jobs.daily_ingestion.run_daily_ingestion` once a day at
@@ -214,3 +230,18 @@ After both deploys and one Upstox re-auth (§5):
 - [ ] Browser devtools network tab shows no CORS errors on any page.
 - [ ] `POST /api/v1/admin/upstox/token` without `X-Admin-Token` returns 401
       (confirms the admin gate is live, not just present in code).
+- [ ] Backend logs show the scheduler lines from §6 (if using Option A) —
+      their absence is the only signal that ingestion silently isn't running.
+
+### Reproducing the container test locally
+
+The whole chain above was validated this way and can be re-run before any
+deploy, without touching the dev database:
+
+```bash
+podman build -t mlai-backend:test backend
+```
+Then create a throwaway database, run the container against it with
+`DATABASE_URL` pointed at that database, and check `/api/v1/health`, the
+migration output, and the two CLI entrypoints
+(`python -m app.services.universe`, `python -m app.jobs.daily_ingestion`).

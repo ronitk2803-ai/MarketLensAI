@@ -9,10 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import router as v1_router
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+configure_logging()
 
 
 def _run_daily_ingestion_job() -> None:

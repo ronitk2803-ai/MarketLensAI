@@ -114,10 +114,11 @@ if __name__ == "__main__":
     # by a symbol list) if that's needed before running this in production.
     import logging
 
+    from app.core.logging import configure_logging
     from app.db.session import SessionLocal
     from app.providers.india.upstox import fetch_instruments_raw, parse_equity_instruments
 
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     logger = logging.getLogger(__name__)
 
     session = SessionLocal()

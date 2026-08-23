@@ -96,7 +96,9 @@ def run_daily_ingestion(db: Session, *, price_lookback_days: int = 10) -> DailyI
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    from app.core.logging import configure_logging
+
+    configure_logging()
     from app.db.session import SessionLocal
 
     session = SessionLocal()
