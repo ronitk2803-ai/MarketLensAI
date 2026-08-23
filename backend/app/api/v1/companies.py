@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Asset
 from app.db.session import get_db
+from app.services.adjusted_prices import get_adjusted_bars
+from app.services.corporate_actions import get_or_fetch_corporate_actions
 from app.services.search import search_assets
 from app.services.technicals import compute_technicals
 
@@ -41,6 +43,12 @@ def _get_asset_or_404(db: Session, symbol: str) -> Asset:
     return asset
 
 
+def _validate_range(range: str) -> int:
+    if range not in RANGE_TO_DAYS:
+        raise HTTPException(status_code=400, detail=f"unsupported range: {range!r}")
+    return RANGE_TO_DAYS[range]
+
+
 @router.get("/assets/search")
 def search(q: str = Query(min_length=1), db: Session = Depends(get_db)) -> dict:
     assets = search_assets(db, q)
@@ -54,8 +62,17 @@ def search(q: str = Query(min_length=1), db: Session = Depends(get_db)) -> dict:
 @router.get("/companies/{symbol}")
 def get_company(symbol: str, db: Session = Depends(get_db)) -> dict:
     asset = _get_asset_or_404(db, symbol)
-    result = compute_technicals(db, asset, lookback_days=30)
-    snapshot = result.snapshot
+    # A short lookback is enough for "latest + previous close" without
+    # paying for a year of history just to render the header.
+    bars, price_source = get_adjusted_bars(db, asset, lookback_days=10)
+
+    latest = bars[-1] if bars else None
+    previous = bars[-2] if len(bars) >= 2 else None
+    change_pct = (
+        (latest.close - previous.close) / previous.close * 100
+        if latest is not None and previous is not None and previous.close
+        else None
+    )
 
     data = {
         "symbol": asset.symbol,
@@ -65,38 +82,58 @@ def get_company(symbol: str, db: Session = Depends(get_db)) -> dict:
         "industry": (
             asset.company.industry.name if asset.company and asset.company.industry else None
         ),
-        "latest_price": {"date": snapshot.as_of, "close": snapshot.close},
+        "latest_price": {
+            "date": latest.date if latest else None,
+            "close": latest.close if latest else None,
+            "change_pct": change_pct,
+        },
     }
-    confidence = "high" if snapshot.close is not None else "low"
-    return _envelope(data, source=result.price_source, confidence=confidence)
+    confidence = "high" if latest is not None else "low"
+    return _envelope(data, source=price_source, confidence=confidence)
 
 
 @router.get("/companies/{symbol}/prices")
 def get_prices(
     symbol: str, range: str = Query(default="1y", alias="range"), db: Session = Depends(get_db)
 ) -> dict:
-    if range not in RANGE_TO_DAYS:
-        raise HTTPException(status_code=400, detail=f"unsupported range: {range!r}")
+    lookback_days = _validate_range(range)
     asset = _get_asset_or_404(db, symbol)
 
-    result = compute_technicals(db, asset, lookback_days=RANGE_TO_DAYS[range])
+    bars, price_source = get_adjusted_bars(db, asset, lookback_days=lookback_days)
     data = [
-        {"date": date, "close": close}
-        for date, close in zip(result.series.dates, result.series.close, strict=True)
+        {
+            "date": b.date,
+            "open": b.open,
+            "high": b.high,
+            "low": b.low,
+            "close": b.close,
+            "volume": b.volume,
+        }
+        for b in bars
     ]
     confidence = "high" if data else "low"
-    return _envelope(data, source=result.price_source, confidence=confidence)
+    return _envelope(data, source=price_source, confidence=confidence)
+
+
+@router.get("/companies/{symbol}/corporate-actions")
+def get_corporate_actions(symbol: str, db: Session = Depends(get_db)) -> dict:
+    asset = _get_asset_or_404(db, symbol)
+    actions = get_or_fetch_corporate_actions(db, asset)
+    data = [
+        {"ex_date": a.ex_date, "type": a.type, "ratio": a.ratio, "amount": a.amount}
+        for a in actions
+    ]
+    return _envelope(data, source="yfinance_actions", confidence="high" if data else "low")
 
 
 @router.get("/companies/{symbol}/technicals")
 def get_technicals(
     symbol: str, range: str = Query(default="1y", alias="range"), db: Session = Depends(get_db)
 ) -> dict:
-    if range not in RANGE_TO_DAYS:
-        raise HTTPException(status_code=400, detail=f"unsupported range: {range!r}")
+    lookback_days = _validate_range(range)
     asset = _get_asset_or_404(db, symbol)
 
-    result = compute_technicals(db, asset, lookback_days=RANGE_TO_DAYS[range])
+    result = compute_technicals(db, asset, lookback_days=lookback_days)
     s = result.snapshot
     data = {
         "latest": {

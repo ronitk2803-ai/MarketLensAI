@@ -80,6 +80,8 @@ def test_get_company_returns_header_and_latest_price(seeded_asset: Asset) -> Non
     assert body["data"]["sector"] == "Test Sector"
     assert body["data"]["industry"] == "Test Industry"
     assert body["data"]["latest_price"]["close"] == pytest.approx(101.5)
+    # 100.0 -> 101.5 is a +1.5% day change.
+    assert body["data"]["latest_price"]["change_pct"] == pytest.approx(1.5)
     assert body["meta"]["confidence"] == "high"
 
 
@@ -93,12 +95,17 @@ def test_get_company_symbol_lookup_is_case_insensitive(seeded_asset: Asset) -> N
     assert response.status_code == 200
 
 
-def test_get_prices_returns_series(seeded_asset: Asset) -> None:
+def test_get_prices_returns_full_ohlc_series(seeded_asset: Asset) -> None:
     response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/prices", params={"range": "1m"})
     assert response.status_code == 200
     body = response.json()
     assert len(body["data"]) == 2
-    assert body["data"][-1]["close"] == pytest.approx(101.5)
+    latest = body["data"][-1]
+    assert latest["close"] == pytest.approx(101.5)
+    assert latest["open"] == pytest.approx(100)
+    assert latest["high"] == pytest.approx(102)
+    assert latest["low"] == pytest.approx(99)
+    assert latest["volume"] == 1200
 
 
 def test_get_prices_rejects_unsupported_range(seeded_asset: Asset) -> None:
@@ -106,6 +113,42 @@ def test_get_prices_rejects_unsupported_range(seeded_asset: Asset) -> None:
         f"/api/v1/companies/{seeded_asset.symbol}/prices", params={"range": "10y"}
     )
     assert response.status_code == 400
+
+
+def test_get_corporate_actions_returns_stubbed_empty_list(seeded_asset: Asset) -> None:
+    # _stub_external_calls stubs YFinanceCorporateActionsProvider to return [].
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/corporate-actions")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"] == []
+    assert body["meta"]["confidence"] == "low"
+
+
+def test_get_corporate_actions_404_for_unknown_symbol() -> None:
+    response = client.get("/api/v1/companies/NOSUCHSYMBOL/corporate-actions")
+    assert response.status_code == 404
+
+
+def test_get_corporate_actions_maps_fields(
+    seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.models import CorporateActionEvent
+
+    monkeypatch.setattr(
+        YFinanceCorporateActionsProvider,
+        "get_corporate_actions",
+        lambda *a, **k: [
+            CorporateActionEvent(type="split", ex_date=dt.date(2024, 10, 28), ratio=2.0)
+        ],
+    )
+
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/corporate-actions")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"] == [
+        {"ex_date": "2024-10-28", "type": "split", "ratio": 2.0, "amount": None}
+    ]
+    assert body["meta"]["confidence"] == "high"
 
 
 def test_get_technicals_returns_snapshot_and_series(seeded_asset: Asset) -> None:

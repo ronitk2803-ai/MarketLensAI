@@ -6,10 +6,8 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset
-from app.engines.adjustment import adjust_bars
 from app.engines.indicators import drawdown_series, historical_volatility, macd, rsi, sma
-from app.services.corporate_actions import get_or_fetch_corporate_actions
-from app.services.prices import get_price_history
+from app.services.adjusted_prices import get_adjusted_bars
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +60,7 @@ _EMPTY_SNAPSHOT = TechnicalSnapshot(
 
 
 def compute_technicals(db: Session, asset: Asset, *, lookback_days: int = 450) -> TechnicalsResult:
-    end = dt.date.today()
-    start = end - dt.timedelta(days=lookback_days)
-
-    raw_bars, price_source = get_price_history(db, asset, start, end)
-    actions = get_or_fetch_corporate_actions(db, asset)
-    bars = adjust_bars(raw_bars, actions)
+    bars, price_source = get_adjusted_bars(db, asset, lookback_days=lookback_days)
 
     dates = [b.date for b in bars]
     closes = [b.close for b in bars]
