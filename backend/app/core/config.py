@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     upstox_api_secret: str | None = None
     upstox_redirect_uri: str | None = None
 
+    # Shared secret gating /admin/* endpoints until a real auth system exists (P1).
+    admin_token: str | None = None
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
