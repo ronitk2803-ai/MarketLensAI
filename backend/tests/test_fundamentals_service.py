@@ -1,4 +1,5 @@
 import datetime as dt
+from decimal import Decimal
 
 import pytest
 from sqlalchemy.orm import Session
@@ -145,3 +146,68 @@ def test_get_or_fetch_statements_returns_empty_when_provider_fails(
     monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_all_statements", fail)
 
     assert get_or_fetch_statements(db, asset) == []
+
+
+def test_a_concurrent_writer_between_cache_check_and_write_does_not_500(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduces the exact race that broke the deployed app.
+
+    get_or_fetch_ratios checks the cache, then fetches, then writes. Another
+    caller (the nightly scoring job) can commit the same (asset_id, metric)
+    rows inside that window, so the write lands on rows that did not exist
+    at check time. With a plain INSERT this raises UniqueViolation on
+    uq_financial_metric_asset_metric and the request 500s — observed live on
+    RELIANCE while the scoring backfill was running.
+
+    The competing commit is injected from the provider stub, which is
+    precisely the check->write window, so this is deterministic rather than
+    thread-timing dependent.
+    """
+    from app.db.session import SessionLocal
+
+    asset = _make_asset(db, "ZZFUNDRACE")
+    db.commit()  # the competing session must be able to see the asset
+    asset_id = asset.id
+
+    values = {"debtToEquity": 12.5, "priceToBook": 3.25}
+    fake_ratios = Ratios(
+        asset=AssetRef(symbol="ZZFUNDRACE", exchange="NSE"),
+        as_of=dt.date.today(),
+        values=values,
+    )
+
+    def _fetch_and_let_a_competitor_win(*args: object, **kwargs: object) -> Ratios:
+        competitor = SessionLocal()
+        try:
+            for metric, value in values.items():
+                competitor.add(
+                    FinancialMetric(
+                        asset_id=asset_id,
+                        metric=metric,
+                        value=Decimal(str(value)),
+                        source="yfinance_fundamentals",
+                        confidence="low",
+                    )
+                )
+            competitor.commit()
+        finally:
+            competitor.close()
+        return fake_ratios
+
+    monkeypatch.setattr(
+        YFinanceFundamentalDataProvider, "get_ratios", _fetch_and_let_a_competitor_win
+    )
+
+    try:
+        rows = get_or_fetch_ratios(db, asset)
+        db.commit()
+
+        assert {r.metric: float(r.value) for r in rows} == values
+        # Upsert, not duplicate insert: still one row per (asset, metric).
+        assert db.query(FinancialMetric).filter_by(asset_id=asset_id).count() == 2
+    finally:
+        db.rollback()
+        db.query(FinancialMetric).filter_by(asset_id=asset_id).delete()
+        db.query(Asset).filter_by(id=asset_id).delete()
+        db.commit()
