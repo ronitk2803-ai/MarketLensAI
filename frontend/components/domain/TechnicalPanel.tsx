@@ -1,3 +1,4 @@
+import { KpiLabel } from "@/components/domain/KpiLabel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { Panel } from "@/components/terminal/Panel";
 import { cn } from "@/lib/utils";
@@ -6,18 +7,25 @@ import type { Meta, TechnicalSnapshot } from "@/lib/api";
 
 function Stat({
   label,
+  glossaryKey,
   value,
   hint,
   hintTone,
 }: {
   label: string;
+  /** Key into KPI_GLOSSARY — omit for a stat with no jargon to explain. */
+  glossaryKey?: string;
   value: string;
   hint?: string;
   hintTone?: string;
 }) {
   return (
     <div className="flex flex-col gap-0.5 border-l border-border px-3 py-1 first:border-l-0 first:pl-0">
-      <span className="label-caps">{label}</span>
+      {glossaryKey ? (
+        <KpiLabel metric={glossaryKey} label={label} className="w-fit" />
+      ) : (
+        <span className="label-caps">{label}</span>
+      )}
       <span className="num text-sm font-medium">{value}</span>
       {hint && <span className={cn("text-[10px]", hintTone ?? "text-muted-foreground")}>{hint}</span>}
     </div>
@@ -71,15 +79,23 @@ export function TechnicalPanel({ snapshot, meta }: { snapshot: TechnicalSnapshot
             <Stat
               key={dma.label}
               label={dma.label}
+              glossaryKey="dma"
               value={price(dma.value)}
               hint={hint?.text}
               hintTone={hint?.tone}
             />
           );
         })}
-        <Stat label="RSI (14)" value={num(rsi, 1)} hint={rsiHint} hintTone={rsiTone} />
+        <Stat
+          label="RSI (14)"
+          glossaryKey="rsi"
+          value={num(rsi, 1)}
+          hint={rsiHint}
+          hintTone={rsiTone}
+        />
         <Stat
           label="MACD"
+          glossaryKey="macd"
           value={num(snapshot.macd_line)}
           hint={
             macdHist == null
@@ -90,11 +106,13 @@ export function TechnicalPanel({ snapshot, meta }: { snapshot: TechnicalSnapshot
         />
         <Stat
           label="Volatility 20d"
+          glossaryKey="volatility"
           value={snapshot.volatility20 == null ? DASH : fracPct(snapshot.volatility20)}
           hint="annualized"
         />
         <Stat
           label="Drawdown"
+          glossaryKey="drawdown"
           value={snapshot.drawdown_pct == null ? DASH : fracPct(snapshot.drawdown_pct)}
           hint="from peak"
           hintTone={snapshot.drawdown_pct == null ? undefined : "text-down"}

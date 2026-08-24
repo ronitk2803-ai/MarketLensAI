@@ -88,6 +88,52 @@ def test_parse_ratios_includes_only_present_fields() -> None:
     assert "freeCashflow" not in ratios.values
 
 
+def test_parse_ratios_falls_back_to_summary_detail_for_trailing_pe() -> None:
+    """Regression test: trailingPE — the number people actually mean by
+    "P/E ratio" (forwardPE is a different, forward-looking figure) — was
+    missing from every company's fundamentals panel. Verified live across
+    RELIANCE/TCS/INFY: Yahoo only ever puts it in summaryDetail, never in
+    financialData or defaultKeyStatistics, which is all get_ratios used to
+    request."""
+    body = {
+        "financialData": {"debtToEquity": {"raw": 36.653, "fmt": "36.65%"}},
+        "defaultKeyStatistics": {"priceToBook": {"raw": 1.97, "fmt": "1.97"}},
+        "summaryDetail": {"trailingPE": {"raw": 23.69821, "fmt": "23.70"}},
+    }
+
+    ratios = parse_ratios(RELIANCE, body)
+
+    assert ratios.values["trailingPE"] == 23.69821
+
+
+def test_parse_ratios_prefers_earlier_modules_when_a_field_is_in_several() -> None:
+    body = {
+        "financialData": {"beta": {"raw": 0.5, "fmt": "0.50"}},
+        "defaultKeyStatistics": {},
+        "summaryDetail": {"beta": {"raw": 0.99, "fmt": "0.99"}},
+    }
+
+    ratios = parse_ratios(RELIANCE, body)
+
+    assert ratios.values["beta"] == 0.5  # financialData wins, not summaryDetail
+
+
+def test_parse_ratios_does_not_drop_a_genuine_zero_to_a_later_module() -> None:
+    """`or`-chaining the three module lookups would treat a real 0.0 as
+    falsy and silently pull a *different* module's value for the same
+    field instead — this pins that beta=0.0 from financialData is kept,
+    not overridden by summaryDetail's non-zero beta."""
+    body = {
+        "financialData": {"beta": {"raw": 0.0, "fmt": "0.00"}},
+        "defaultKeyStatistics": {},
+        "summaryDetail": {"beta": {"raw": 1.2, "fmt": "1.20"}},
+    }
+
+    ratios = parse_ratios(RELIANCE, body)
+
+    assert ratios.values["beta"] == 0.0
+
+
 def test_parse_statements_extracts_only_populated_line_items() -> None:
     statements = parse_statements(RELIANCE, INCOME_STATEMENT_BODY, "income", "FY")
 

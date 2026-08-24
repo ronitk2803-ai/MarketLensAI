@@ -130,9 +130,24 @@ def fetch_quote_summary(asset: AssetRef, modules: list[str], *, session: YahooSe
 def parse_ratios(asset: AssetRef, body: dict) -> Ratios:
     financial_data = body.get("financialData", {})
     key_stats = body.get("defaultKeyStatistics", {})
+    # Verified live across RELIANCE/TCS/INFY: Yahoo puts trailingPE (the
+    # ratio people mean by "P/E ratio" — forwardPE is a different, forward-
+    # looking number and was the only one of the two we had) only here, not
+    # in financialData or defaultKeyStatistics — it was silently absent from
+    # every company's fundamentals panel, not a per-stock coverage gap.
+    summary_detail = body.get("summaryDetail", {})
     values = {}
     for field in RATIO_FIELDS:
-        value = _extract(financial_data.get(field)) or _extract(key_stats.get(field))
+        # `or`-chaining would treat a genuine 0.0 (a real beta, a real 0%
+        # debtToEquity) as falsy and wrongly fall through to the next
+        # module's value for the same field — check each source in order
+        # and take the first that actually resolved, not the first truthy
+        # one.
+        value = None
+        for source in (financial_data, key_stats, summary_detail):
+            value = _extract(source.get(field))
+            if value is not None:
+                break
         if value is not None:
             values[field] = value
     return Ratios(asset=asset, as_of=dt.date.today(), values=values)
@@ -179,7 +194,9 @@ class YFinanceFundamentalDataProvider:
 
     def get_ratios(self, asset: AssetRef) -> Ratios:
         body = fetch_quote_summary(
-            asset, ["financialData", "defaultKeyStatistics"], session=self._session
+            asset,
+            ["financialData", "defaultKeyStatistics", "summaryDetail"],
+            session=self._session,
         )
         return parse_ratios(asset, body)
 

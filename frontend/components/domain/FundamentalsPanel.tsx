@@ -1,3 +1,4 @@
+import { KpiLabel } from "@/components/domain/KpiLabel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { Panel } from "@/components/terminal/Panel";
 import { DASH } from "@/lib/format";
@@ -85,7 +86,7 @@ export function FundamentalsPanel({
                   key={r.metric}
                   className="flex flex-col gap-0.5 border-l border-border px-3 first:border-l-0 first:pl-0"
                 >
-                  <span className="label-caps truncate">{RATIO_LABELS[r.metric] ?? r.metric}</span>
+                  <KpiLabel metric={r.metric} label={RATIO_LABELS[r.metric] ?? r.metric} />
                   <span className="num text-sm font-medium">
                     {formatRatio(r.metric, r.value)}
                   </span>
