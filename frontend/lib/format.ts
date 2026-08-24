@@ -46,7 +46,11 @@ export function crores(value: number | null | undefined): string {
  * for a share count rather than a rupee amount, so no ₹ prefix. */
 export function croreShares(value: number | null | undefined): string {
   if (value == null) return DASH;
-  return (value / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  // Verified live: without a unit this rendered as a bare "1,353.25" next
+  // to a label reading just "Shares outstanding" — indistinguishable from
+  // a raw share count, a lakh figure, or anything else. The unit has to be
+  // in the string itself, not implied by the label.
+  return `${(value / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 2 })} Cr`;
 }
 
 /**
