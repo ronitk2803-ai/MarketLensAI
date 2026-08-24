@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { AiSummaryPanel } from "@/components/domain/AiSummaryPanel";
 import { FundamentalsPanel } from "@/components/domain/FundamentalsPanel";
 import { LivePrice } from "@/components/domain/LivePrice";
 import { NewsPanel } from "@/components/domain/NewsPanel";
@@ -10,6 +11,7 @@ import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
 import { compact, price, tradingDate } from "@/lib/format";
 import {
   ApiError,
+  getAiSummary,
   getCompany,
   getCorporateActions,
   getFundamentals,
@@ -47,14 +49,16 @@ export default async function CompanyPage({
     throw error;
   }
 
-  const [prices, technicals, corporateActions, fundamentals, news, score] = await Promise.all([
-    getPrices(symbol, range),
-    getTechnicals(symbol, range),
-    getCorporateActions(symbol),
-    getFundamentals(symbol),
-    getNews(symbol),
-    getScore(symbol),
-  ]);
+  const [prices, technicals, corporateActions, fundamentals, news, score, aiSummary] =
+    await Promise.all([
+      getPrices(symbol, range),
+      getTechnicals(symbol, range),
+      getCorporateActions(symbol),
+      getFundamentals(symbol),
+      getNews(symbol),
+      getScore(symbol),
+      getAiSummary(symbol),
+    ]);
 
   const header = company.data;
   const changePct = header.latest_price.change_pct;
@@ -144,6 +148,8 @@ export default async function CompanyPage({
       </div>
 
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
+
+      <AiSummaryPanel symbol={header.symbol} initial={aiSummary.data} />
 
       <div className="grid gap-3 xl:grid-cols-[1fr_420px]">
         <FundamentalsPanel fundamentals={fundamentals.data} meta={fundamentals.meta} />

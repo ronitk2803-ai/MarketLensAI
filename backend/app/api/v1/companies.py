@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Asset
 from app.db.session import get_db
+from app.providers.errors import ProviderError
 from app.services.adjusted_prices import get_adjusted_bars
+from app.services.company_summary import generate_summary, get_cached_summary
 from app.services.corporate_actions import get_or_fetch_corporate_actions
 from app.services.fundamentals import get_or_fetch_ratios, get_or_fetch_statements
 from app.services.news import get_or_fetch_news
@@ -180,6 +182,31 @@ def get_news(symbol: str, db: Session = Depends(get_db)) -> dict:
         for a in articles
     ]
     return _envelope(data, source="google_news", confidence="high" if data else "low")
+
+
+@router.get("/companies/{symbol}/ai-summary")
+def get_ai_summary(symbol: str, db: Session = Depends(get_db)) -> dict:
+    """Cache-only read — never triggers generation, so it's safe to load on
+    every page view. `POST` (the button) is the only thing that spends an
+    LLM call, and only when the cached summary is actually out of date."""
+    asset = _get_asset_or_404(db, symbol)
+    row = get_cached_summary(db, asset)
+    data = {"summary": row.summary, "generated_at": row.generated_at} if row else None
+    return _envelope(data, source="gemini_summary", confidence="low")
+
+
+@router.post("/companies/{symbol}/ai-summary")
+def create_ai_summary(symbol: str, db: Session = Depends(get_db)) -> dict:
+    """User-triggered generation. Cache-aware (app/services/company_summary.py):
+    a click when nothing about the company changed since the last click
+    reuses the cached row rather than spending another API call."""
+    asset = _get_asset_or_404(db, symbol)
+    try:
+        row = generate_summary(db, asset)
+    except ProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    data = {"summary": row.summary, "generated_at": row.generated_at}
+    return _envelope(data, source="gemini_summary", confidence="low")
 
 
 @router.get("/companies/{symbol}/score")

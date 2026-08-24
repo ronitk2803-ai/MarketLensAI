@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     upstox_api_secret: str | None = None
     upstox_redirect_uri: str | None = None
 
+    # Gemini's free tier (rate-limited, no cost) — used for the click-
+    # triggered AI company summary. See app/services/company_summary.py for
+    # why generation stays inside free-tier limits regardless of traffic.
+    gemini_api_key: str | None = None
+
     # Shared secret gating /admin/* endpoints until a real auth system exists (P1).
     admin_token: str | None = None
 

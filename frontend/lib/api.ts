@@ -277,6 +277,28 @@ export interface LiveQuote {
   day_candle: DayCandle | null;
 }
 
+export interface AiSummary {
+  summary: string;
+  generated_at: string;
+}
+
+/** Cache-only read — never triggers generation, safe on every page load. */
+export function getAiSummary(symbol: string) {
+  return apiFetch<AiSummary | null>(`/companies/${encodeURIComponent(symbol)}/ai-summary`, {
+    next: { revalidate: 60 },
+  });
+}
+
+/** The button's action — the only thing that can spend an LLM call, and
+ * only when the cached summary is actually out of date (see backend
+ * app/services/company_summary.py). */
+export function generateAiSummary(symbol: string) {
+  return apiFetch<AiSummary>(`/companies/${encodeURIComponent(symbol)}/ai-summary`, {
+    method: "POST",
+    cache: "no-store",
+  }).then((e) => e.data);
+}
+
 export function getLiveQuotes(symbols: string[]) {
   const params = new URLSearchParams({ symbols: symbols.join(",") });
   return apiFetch<LiveQuote[]>(`/quotes?${params.toString()}`, { cache: "no-store" });

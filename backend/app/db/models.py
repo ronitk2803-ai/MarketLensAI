@@ -225,6 +225,27 @@ class NewsArticle(Base):
     )
 
 
+class CompanyAiSummary(Base):
+    """Cached AI-generated narrative summary (news + fundamentals + price in
+    one paragraph). Generated on user demand via a button click, not on a
+    schedule (app/services/company_summary.py) — one row per asset, a fresh
+    generation overwrites rather than accumulating history. `source_hash`
+    fingerprints the inputs a generation was based on, so a click when
+    nothing material changed since the last one reuses this row instead of
+    spending another (free-tier, rate-limited) LLM call."""
+
+    __tablename__ = "company_ai_summary"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), unique=True, index=True)
+    summary: Mapped[str]
+    source_hash: Mapped[str]
+    model: Mapped[str]
+    generated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ScoreProfile(Base):
     """Weight configuration for the scoring engine (Build_plan.md §L/§M):
     "weights are versioned configuration, never code constants." Only a
