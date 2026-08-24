@@ -61,6 +61,11 @@ services:
       UPSTOX_API_SECRET: ${UPSTOX_API_SECRET:-}
       UPSTOX_REDIRECT_URI: ${UPSTOX_REDIRECT_URI:-}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Gemini free tier — the click-triggered AI company summary. Was set
+      # in backend/.env for the bare-metal local dev server but never wired
+      # into this compose file, so the containerized deploy always 502'd
+      # with "GEMINI_API_KEY not configured" even though local dev worked.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     ports:
       - "8000:8000"
     healthcheck:
