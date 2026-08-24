@@ -255,6 +255,15 @@ export function getWatchlistQuotes(symbols: string[], deltaDays: number[]) {
   return apiFetch<WatchlistResponse>(`/watchlist/quotes?${params.toString()}`).then((e) => e.data);
 }
 
+export interface DayCandle {
+  open: number;
+  high: number;
+  low: number;
+  /** The live LTP — this candle is still forming. */
+  close: number;
+  volume: number | null;
+}
+
 export interface LiveQuote {
   symbol: string;
   exchange: string;
@@ -264,6 +273,8 @@ export interface LiveQuote {
   as_of: string;
   /** Provider's own session state, e.g. "REGULAR" | "CLOSED" | "PRE" | "POST". */
   market_state: string | null;
+  /** Today's forming OHLCV; null unless the full OHLC is available. */
+  day_candle: DayCandle | null;
 }
 
 export function getLiveQuotes(symbols: string[]) {

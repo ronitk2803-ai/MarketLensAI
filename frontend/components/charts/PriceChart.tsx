@@ -8,12 +8,14 @@ import {
   HistogramSeries,
   LineSeries,
   type IChartApi,
+  type ISeriesApi,
   type SeriesMarker,
   type Time,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 
 import type { CorporateAction, PriceBar, TechnicalSeries } from "@/lib/api";
+import { useLiveQuotes } from "@/lib/use-live-quotes";
 import { useIsLightTheme } from "@/lib/use-theme";
 
 const DMA_LINES: { key: keyof TechnicalSeries; color: string; title: string }[] = [
@@ -61,17 +63,49 @@ function cssVar(name: string): string {
   return a === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
 }
 
+/** YYYY-MM-DD for an instant, in the exchange's own timezone. `en-CA`
+ * formats as ISO, which is also what the chart's time axis expects. */
+const IST_DATE = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Kolkata",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function istDate(iso: string): string {
+  return IST_DATE.format(new Date(iso));
+}
+
 export function PriceChart({
+  symbol,
   bars,
   technicals,
   corporateActions,
 }: {
+  symbol: string;
   bars: PriceBar[];
   technicals: TechnicalSeries | null;
   corporateActions: CorporateAction[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  // Held so the live-candle effect can update the last bar in place. A
+  // rebuild-per-tick would throw away the user's pan/zoom every 15s and
+  // re-run the whole series setup for one changed candle.
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  // Whether a provisional candle is currently appended past the stored
+  // bars, so the visible-range fill (and the ResizeObserver that re-applies
+  // it) accounts for it instead of cutting it off the right edge.
+  const liveBarRef = useRef(false);
+
+  const live = useLiveQuotes([symbol]);
+  const liveQuote = live.isLive ? live.bySymbol[symbol] : undefined;
+  const liveCandle = liveQuote?.day_candle ?? null;
+  // The candle belongs to the exchange's trading day, not the viewer's. A
+  // browser in New York would otherwise place an NSE session on the
+  // previous calendar date and push the bar behind the series' last point.
+  const liveDate = liveQuote ? istDate(liveQuote.as_of) : null;
   // Chart colours are read out of CSS custom properties once, at build time
   // — canvas can't participate in the cascade — so a theme switch has to
   // rebuild the chart, or the axis text keeps the old theme's contrast and
@@ -115,6 +149,7 @@ export function PriceChart({
       wickUpColor: UP,
       wickDownColor: DOWN,
     });
+    candleSeriesRef.current = candleSeries;
     candleSeries.setData(
       bars.map((b) => ({
         time: b.date as Time,
@@ -130,6 +165,7 @@ export function PriceChart({
       priceScaleId: "volume",
       color: mutedForeground,
     });
+    volumeSeriesRef.current = volumeSeries;
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     volumeSeries.setData(
       bars.map((b) => ({
@@ -188,7 +224,10 @@ export function PriceChart({
     //      full-width chart.
     // Re-applying on every resize is what keeps (2) fixed rather than
     // merely fixed-on-first-paint.
-    const fill = () => chart.timeScale().setVisibleLogicalRange({ from: 0, to: bars.length - 1 });
+    const fill = () =>
+      chart
+        .timeScale()
+        .setVisibleLogicalRange({ from: 0, to: bars.length - 1 + (liveBarRef.current ? 1 : 0) });
     fill();
     const observer = new ResizeObserver(fill);
     observer.observe(container);
@@ -197,8 +236,84 @@ export function PriceChart({
       observer.disconnect();
       chart.remove();
       chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      liveBarRef.current = false;
     };
   }, [bars, technicals, corporateActions, isLight]);
+
+  // Today's forming candle, applied with update() rather than by rebuilding
+  // the chart. Two reasons this is a separate effect and not part of the one
+  // above: a rebuild every 15s would discard the user's pan/zoom and redo
+  // the whole series setup for one changed bar, and update() is the API
+  // lightweight-charts provides precisely for a bar that is still forming.
+  //
+  // The DMA overlays deliberately stop at the last completed session. They
+  // are computed server-side from ingested bars, and extending them through
+  // a provisional candle would mean recomputing indicators in the browser
+  // against a close that is still moving — a 200-day average that flickers
+  // intraday is worse than one that plainly ends at Friday.
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
+    if (!candleSeries || !volumeSeries || bars.length === 0) return;
+
+    const lastStored = bars[bars.length - 1];
+
+    if (!liveCandle) {
+      // Nothing live (market shut, or the feed dropped). If a provisional
+      // candle was drawn earlier in this session, put the last stored bar
+      // back so the chart never keeps a stale forming candle on screen.
+      if (liveBarRef.current) {
+        candleSeries.setData(
+          bars.map((b) => ({
+            time: b.date as Time,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+          })),
+        );
+        volumeSeries.setData(
+          bars.map((b) => ({
+            time: b.date as Time,
+            value: b.volume,
+            color: b.close >= b.open ? `${UP}66` : `${DOWN}66`,
+          })),
+        );
+        liveBarRef.current = false;
+        chartRef.current?.timeScale().setVisibleLogicalRange({ from: 0, to: bars.length - 1 });
+      }
+      return;
+    }
+
+    // update() requires a time at or after the series' last point. Equal
+    // means the session has already been ingested, and the provisional
+    // candle simply refreshes that bar in place rather than appending.
+    if (!liveDate || liveDate < lastStored.date) return;
+    const liveTime = liveDate;
+    const appends = liveDate > lastStored.date;
+
+    candleSeries.update({
+      time: liveTime as Time,
+      open: liveCandle.open,
+      high: liveCandle.high,
+      low: liveCandle.low,
+      close: liveCandle.close,
+    });
+    if (liveCandle.volume !== null) {
+      volumeSeries.update({
+        time: liveTime as Time,
+        value: liveCandle.volume,
+        color: liveCandle.close >= liveCandle.open ? `${UP}66` : `${DOWN}66`,
+      });
+    }
+
+    if (appends && !liveBarRef.current) {
+      liveBarRef.current = true;
+      chartRef.current?.timeScale().setVisibleLogicalRange({ from: 0, to: bars.length });
+    }
+  }, [liveCandle, liveDate, bars]);
 
   if (bars.length === 0) {
     return (

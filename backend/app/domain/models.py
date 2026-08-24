@@ -59,6 +59,16 @@ class Quote:
     previous_close: float | None = None
     market_state: str | None = None
 
+    # The session's OHLCV so far. Enough to draw the forming candle without
+    # a second request, since the same payload already carries it. Kept
+    # separate from `Bar` deliberately: a Bar is a completed session that
+    # has been ingested and is safe to persist and compute indicators on,
+    # whereas these values are provisional and change until the close.
+    day_open: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    day_volume: int | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class CorporateActionEvent:

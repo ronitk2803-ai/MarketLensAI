@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 import type { LiveQuote } from "@/lib/api";
 
@@ -19,6 +19,98 @@ export interface LiveQuoteState {
   isLive: boolean;
 }
 
+const EMPTY: LiveQuoteState = { bySymbol: {}, isLive: false };
+
+/**
+ * One polling loop per distinct symbol list, shared by every component that
+ * asks for it.
+ *
+ * The company page mounts two consumers of the same symbol — the header
+ * price and the chart's forming candle — and a naive per-hook loop would
+ * poll twice for identical data. The server-side cache would absorb the
+ * duplicate, but the honest fix is not to make the request twice. Keeping
+ * the loop in a module-level registry rather than a React context also
+ * avoids threading a provider through a server-rendered page just to share
+ * a timer.
+ *
+ * The loop starts with the first subscriber and stops with the last, so a
+ * page with no live consumers polls nothing.
+ */
+interface Entry {
+  state: LiveQuoteState;
+  listeners: Set<() => void>;
+  timer?: ReturnType<typeof setTimeout>;
+  open: boolean;
+}
+
+const registry = new Map<string, Entry>();
+
+function emit(entry: Entry, state: LiveQuoteState): void {
+  entry.state = state;
+  entry.listeners.forEach((l) => l());
+}
+
+async function poll(key: string): Promise<void> {
+  const entry = registry.get(key);
+  if (!entry) return;
+
+  // After every await, the entry this call belongs to may have been torn
+  // down and a fresh one put in its place (a remount, or a symbol list that
+  // changed and changed back). Comparing identity — not just presence —
+  // stops a stale in-flight poll from resolving into an entry that no
+  // longer owns it, which would leave the new entry with no data and no
+  // scheduled retry.
+  const stillOurs = () => registry.get(key) === entry;
+
+  try {
+    const res = await fetch(`/api/quotes?symbols=${encodeURIComponent(key)}`, {
+      cache: "no-store",
+    });
+    const data: { quotes: LiveQuote[]; live: boolean } = await res.json();
+    if (!stillOurs()) return;
+
+    entry.open = data.live && data.quotes.some((q) => q.market_state === "REGULAR");
+    emit(entry, {
+      bySymbol: Object.fromEntries(data.quotes.map((q) => [q.symbol, q])),
+      isLive: entry.open,
+    });
+  } catch {
+    // Drop the quotes rather than keeping the last good ones. Holding them
+    // shows an intraday price with a day-change beside it while the UI
+    // says the feed is unavailable — a stale number that reads exactly
+    // like a current one, which is the single thing this must not do.
+    // Falling back to stored data costs one poll interval of precision and
+    // stays honest.
+    if (!stillOurs()) return;
+    entry.open = false;
+    emit(entry, EMPTY);
+  } finally {
+    if (stillOurs()) {
+      entry.timer = setTimeout(() => void poll(key), entry.open ? LIVE_POLL_MS : CLOSED_POLL_MS);
+    }
+  }
+}
+
+function subscribe(key: string, listener: () => void): () => void {
+  let entry = registry.get(key);
+  if (!entry) {
+    entry = { state: EMPTY, listeners: new Set(), open: false };
+    registry.set(key, entry);
+    void poll(key);
+  }
+  entry.listeners.add(listener);
+
+  return () => {
+    const current = registry.get(key);
+    if (!current) return;
+    current.listeners.delete(listener);
+    if (current.listeners.size === 0) {
+      if (current.timer) clearTimeout(current.timer);
+      registry.delete(key);
+    }
+  };
+}
+
 /**
  * Polls /api/quotes for `symbols`, adapting its cadence to whether the
  * exchange is actually open.
@@ -28,63 +120,24 @@ export interface LiveQuoteState {
  * holiday and would need maintaining forever.
  */
 export function useLiveQuotes(symbols: string[]): LiveQuoteState {
-  const [state, setState] = useState<LiveQuoteState>({ bySymbol: {}, isLive: false });
-
-  // Symbols arrive as a new array identity on every parent render; keying
-  // the effect off the joined string means it only re-subscribes when the
-  // actual list changes, not on every keystroke elsewhere in the panel.
+  // Symbols arrive as a new array identity on every parent render; the
+  // joined string is what actually identifies the subscription.
   const key = symbols.join(",");
 
-  useEffect(() => {
-    // No symbols: the panel renders its empty state and never reads these,
-    // so there is nothing to clear and no reason to touch state here.
-    if (!key) return;
+  // Stable per key. Without useCallback this identity changes on every
+  // render, so React tears the subscription down and rebuilds it each time
+  // — and since the last unsubscribe deletes the registry entry and clears
+  // its timer, the loop would be destroyed before any poll could land.
+  const subscribeToKey = useCallback(
+    (listener: () => void) => (key ? subscribe(key, listener) : () => {}),
+    [key],
+  );
 
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // The loop's own liveness, kept in the closure rather than read back
-    // out of React state — the next delay is a property of the poll that
-    // just finished, not of what has been rendered since.
-    let open = false;
-
-    async function poll() {
-      try {
-        const res = await fetch(`/api/quotes?symbols=${encodeURIComponent(key)}`, {
-          cache: "no-store",
-        });
-        const data: { quotes: LiveQuote[]; live: boolean } = await res.json();
-        if (cancelled) return;
-
-        open = data.live && data.quotes.some((q) => q.market_state === "REGULAR");
-        setState({
-          bySymbol: Object.fromEntries(data.quotes.map((q) => [q.symbol, q])),
-          isLive: open,
-        });
-      } catch {
-        // Drop the quotes rather than keeping the last good ones. Holding
-        // them shows an intraday price with a day-change beside it while
-        // the panel's own footnote says the feed is unavailable — a stale
-        // number that reads exactly like a current one, which is the single
-        // thing this panel must not do. Falling back to the stored close
-        // costs one poll interval of precision and stays honest.
-        if (cancelled) return;
-        open = false;
-        setState({ bySymbol: {}, isLive: false });
-      } finally {
-        if (!cancelled) {
-          timer = setTimeout(poll, open ? LIVE_POLL_MS : CLOSED_POLL_MS);
-        }
-      }
-    }
-
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [key]);
-
-  // With no symbols there is nothing live, whatever a previous list left
-  // behind — derived at render rather than written back into state.
-  return key ? state : { bySymbol: {}, isLive: false };
+  return useSyncExternalStore(
+    subscribeToKey,
+    () => (key ? (registry.get(key)?.state ?? EMPTY) : EMPTY),
+    // The server has no live feed and must render the stored values, which
+    // is also what the client shows until the first poll lands.
+    () => EMPTY,
+  );
 }

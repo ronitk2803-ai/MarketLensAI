@@ -167,3 +167,45 @@ def test_non_nse_exchange_is_rejected() -> None:
 
 def test_quote_key_matches_the_codebase_convention() -> None:
     assert quote_key("NSE", "RELIANCE") == "NSE:RELIANCE"
+
+
+def test_parses_the_forming_day_candle() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "quoteResponse": {
+                    "result": [
+                        {
+                            **_quote_row("RELIANCE.NS", 1304.0, 1316.0),
+                            "regularMarketOpen": 1316.6,
+                            "regularMarketDayHigh": 1320.0,
+                            "regularMarketDayLow": 1303.2,
+                            "regularMarketVolume": 4834344,
+                        }
+                    ]
+                }
+            },
+        )
+
+    provider = YFinanceQuoteProvider(session=_session(handler))
+    q = provider.get_quote([_ref("RELIANCE")])["NSE:RELIANCE"]
+
+    assert (q.day_open, q.day_high, q.day_low) == (1316.6, 1320.0, 1303.2)
+    assert q.day_volume == 4834344
+    assert isinstance(q.day_volume, int)
+
+
+def test_absent_candle_fields_are_none_not_zero() -> None:
+    """A missing open rendered as 0 would draw a candle spanning the entire
+    price axis; missing has to stay missing."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"quoteResponse": {"result": [_quote_row("TCS.NS", 2294.8)]}}
+        )
+
+    provider = YFinanceQuoteProvider(session=_session(handler))
+    q = provider.get_quote([_ref("TCS")])["NSE:TCS"]
+
+    assert (q.day_open, q.day_high, q.day_low, q.day_volume) == (None, None, None, None)

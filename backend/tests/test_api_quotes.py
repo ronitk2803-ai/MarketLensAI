@@ -1,3 +1,4 @@
+import dataclasses
 import datetime as dt
 from collections.abc import Iterator
 
@@ -111,3 +112,57 @@ def test_no_quotes_reports_low_confidence(db: Session, monkeypatch: pytest.Monke
 
 def test_rejects_empty_symbol_list() -> None:
     assert client.get("/api/v1/quotes", params={"symbols": ""}).status_code == 400
+
+
+def _quote_with_candle(**overrides: object) -> Quote:
+    base = Quote(
+        asset=AssetRef(symbol="ZZAPIQ4", exchange="NSE", market="IN"),
+        ltp=1304.0,
+        as_of=dt.datetime.now(dt.UTC),
+        previous_close=1316.0,
+        market_state="REGULAR",
+        day_open=1316.6,
+        day_high=1320.0,
+        day_low=1303.2,
+        day_volume=4834344,
+    )
+    return dataclasses.replace(base, **overrides)
+
+
+def test_day_candle_is_exposed_with_ltp_as_its_close(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(db, "ZZAPIQ4")
+    monkeypatch.setattr(
+        quotes_service, "_provider", _StubProvider({"NSE:ZZAPIQ4": _quote_with_candle()})
+    )
+
+    candle = client.get("/api/v1/quotes", params={"symbols": "ZZAPIQ4"}).json()["data"][0][
+        "day_candle"
+    ]
+
+    assert candle == {
+        "open": 1316.6,
+        "high": 1320.0,
+        "low": 1303.2,
+        "close": 1304.0,  # the live LTP, not a separate field
+        "volume": 4834344,
+    }
+
+
+def test_a_partial_candle_is_suppressed_entirely(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Half a candle is worse than none: a missing open renders as a shape
+    the session never had."""
+    _seed(db, "ZZAPIQ4")
+    monkeypatch.setattr(
+        quotes_service,
+        "_provider",
+        _StubProvider({"NSE:ZZAPIQ4": _quote_with_candle(day_open=None)}),
+    )
+
+    row = client.get("/api/v1/quotes", params={"symbols": "ZZAPIQ4"}).json()["data"][0]
+
+    assert row["day_candle"] is None
+    assert row["ltp"] == 1304.0  # the price itself is still usable

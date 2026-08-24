@@ -50,6 +50,14 @@ def _chunks(items: list[AssetRef], size: int) -> list[list[AssetRef]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+def _opt_float(value: object) -> float | None:
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _opt_int(value: object) -> int | None:
+    return int(value) if isinstance(value, int | float) else None
+
+
 class YFinanceQuoteProvider:
     """Implements the `get_quote` half of `MarketDataProvider`.
 
@@ -92,12 +100,12 @@ class YFinanceQuoteProvider:
                     asset=asset,
                     ltp=float(ltp),
                     as_of=dt.datetime.fromtimestamp(int(timestamp), dt.UTC),
-                    previous_close=(
-                        float(row["regularMarketPreviousClose"])
-                        if row.get("regularMarketPreviousClose") is not None
-                        else None
-                    ),
+                    previous_close=_opt_float(row.get("regularMarketPreviousClose")),
                     market_state=row.get("marketState"),
+                    day_open=_opt_float(row.get("regularMarketOpen")),
+                    day_high=_opt_float(row.get("regularMarketDayHigh")),
+                    day_low=_opt_float(row.get("regularMarketDayLow")),
+                    day_volume=_opt_int(row.get("regularMarketVolume")),
                 )
 
         return quotes

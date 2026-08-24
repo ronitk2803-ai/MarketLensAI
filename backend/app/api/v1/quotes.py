@@ -45,6 +45,20 @@ def live_quotes(
             ),
             "as_of": q.as_of,
             "market_state": q.market_state,
+            # The forming candle. Only emitted when the whole OHLC is
+            # present — a partial candle would render as a misleading shape
+            # (a missing open collapses it to a doji it never was).
+            "day_candle": (
+                {
+                    "open": q.day_open,
+                    "high": q.day_high,
+                    "low": q.day_low,
+                    "close": q.ltp,
+                    "volume": q.day_volume,
+                }
+                if None not in (q.day_open, q.day_high, q.day_low)
+                else None
+            ),
         }
         for q in quotes.values()
     ]

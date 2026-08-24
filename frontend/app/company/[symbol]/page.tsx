@@ -158,6 +158,7 @@ export default async function CompanyPage({
           bodyClassName="p-2"
         >
           <PriceChart
+            symbol={header.symbol}
             bars={bars}
             technicals={technicals.data.series}
             corporateActions={corporateActions.data}
