@@ -12,10 +12,10 @@ export function AppHeader() {
           to reach the screener on a phone. */}
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:h-12 sm:flex-nowrap sm:py-0">
         <Link href="/" className="flex shrink-0 items-center gap-2">
-          <span className="grid size-6 place-items-center rounded-sm bg-primary text-[11px] font-bold text-primary-foreground">
-            M
+          <span className="grid size-6 place-items-center rounded-sm bg-primary text-[10px] font-bold text-primary-foreground">
+            ML
           </span>
-          <span className="text-sm font-semibold tracking-tight">mlai</span>
+          <span className="text-sm font-semibold tracking-tight">MarketLens AI</span>
         </Link>
 
         <nav className="flex items-center gap-1">

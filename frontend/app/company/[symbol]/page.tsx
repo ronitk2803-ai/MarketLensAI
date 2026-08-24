@@ -1,15 +1,12 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { PriceChart } from "@/components/charts/PriceChart";
 import { FundamentalsPanel } from "@/components/domain/FundamentalsPanel";
 import { LivePrice } from "@/components/domain/LivePrice";
 import { NewsPanel } from "@/components/domain/NewsPanel";
+import { PriceChartPanel } from "@/components/domain/PriceChartPanel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { ScorePanel } from "@/components/domain/ScorePanel";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
-import { Panel } from "@/components/terminal/Panel";
-import { cn } from "@/lib/utils";
 import { compact, price, tradingDate } from "@/lib/format";
 import {
   ApiError,
@@ -135,35 +132,13 @@ export default async function CompanyPage({
 
       {/* Chart gets the width; score rides alongside it on wide screens. */}
       <div className="grid gap-3 xl:grid-cols-[1fr_320px]">
-        <Panel
-          title="Price"
-          actions={
-            <div className="flex gap-0.5">
-              {RANGES.map((r) => (
-                <Link
-                  key={r}
-                  href={`/company/${symbol}?range=${r}`}
-                  className={cn(
-                    "num rounded-sm px-2 py-0.5 text-[11px] transition-colors",
-                    r === range
-                      ? "bg-primary/20 font-medium text-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                  )}
-                >
-                  {r.toUpperCase()}
-                </Link>
-              ))}
-            </div>
-          }
-          bodyClassName="p-2"
-        >
-          <PriceChart
-            symbol={header.symbol}
-            bars={bars}
-            technicals={technicals.data.series}
-            corporateActions={corporateActions.data}
-          />
-        </Panel>
+        <PriceChartPanel
+          symbol={header.symbol}
+          range={range}
+          bars={bars}
+          technicals={technicals.data.series}
+          corporateActions={corporateActions.data}
+        />
 
         <ScorePanel score={score.data} meta={score.meta} />
       </div>

@@ -81,11 +81,15 @@ export function PriceChart({
   bars,
   technicals,
   corporateActions,
+  heightClassName = "h-[420px]",
 }: {
   symbol: string;
   bars: PriceBar[];
   technicals: TechnicalSeries | null;
   corporateActions: CorporateAction[];
+  /** Lets a fullscreened container ask the chart to fill it (h-full)
+   * instead of the fixed 420px that fits a homepage-scale panel. */
+  heightClassName?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -323,5 +327,5 @@ export function PriceChart({
     );
   }
 
-  return <div ref={containerRef} className="h-[420px] w-full" />;
+  return <div ref={containerRef} className={`${heightClassName} w-full`} />;
 }

@@ -62,6 +62,7 @@ export function TechnicalPanel({ snapshot, meta }: { snapshot: TechnicalSnapshot
       title="Technicals"
       actions={<ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />}
       bodyClassName="p-3"
+      fullscreenable
     >
       <div className="grid grid-cols-2 gap-y-3 sm:grid-cols-4">
         {dmas.map((dma) => {

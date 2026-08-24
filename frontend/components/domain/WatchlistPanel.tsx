@@ -11,6 +11,7 @@ import { Sparkline } from "@/components/terminal/Sparkline";
 import type { AssetSearchResult, LiveQuote, WatchlistQuote } from "@/lib/api";
 import { price, tradingDate } from "@/lib/format";
 import { useLiveQuotes } from "@/lib/use-live-quotes";
+import { usePriceFlash } from "@/lib/use-price-flash";
 import { cn } from "@/lib/utils";
 import { useDeltaDays, useWatchlistSymbols } from "@/lib/watchlist-storage";
 
@@ -114,6 +115,7 @@ export function WatchlistPanel() {
       }
       bodyClassName="p-0"
       footnote={`${quoteSourceNote} Δ windows and ranges are end-of-day and corporate-action adjusted; 'all-time' means since this deployment started tracking each stock, not its full listed history.`}
+      fullscreenable
     >
       {symbols.length === 0 ? (
         <p className="px-3 py-8 text-center text-xs text-muted-foreground">
@@ -177,6 +179,8 @@ function WatchlistRow({
   deltaDays: [number, number, number];
   onRemove: () => void;
 }) {
+  const flash = usePriceFlash(liveQuote?.ltp);
+
   if (isUnknown) {
     return (
       <tr className="border-b border-border/60 last:border-0">
@@ -225,7 +229,13 @@ function WatchlistRow({
           The subline always says which one you're looking at — an
           unlabelled price is the one thing this panel must never show,
           since a stale number and a live number look identical. */}
-      <td className="px-2 py-2 text-right">
+      <td
+        className={cn(
+          "rounded-sm px-2 py-2 text-right transition-colors",
+          flash === "up" && "flash-up",
+          flash === "down" && "flash-down",
+        )}
+      >
         {liveQuote ? (
           <>
             <span className="num block whitespace-nowrap">{price(liveQuote.ltp)}</span>

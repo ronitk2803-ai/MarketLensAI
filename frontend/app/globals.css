@@ -187,3 +187,30 @@
     @apply text-[10px] font-medium tracking-[0.08em] text-muted-foreground uppercase;
   }
 }
+
+/* One-shot highlight for a number that just changed on a live poll — see
+   lib/use-price-flash.ts. Fades from the semantic up/down tint back to
+   nothing rather than snapping off, so a fast succession of ticks reads as
+   motion instead of a strobe. */
+@keyframes price-flash {
+  from {
+    background-color: var(--up-muted);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+@keyframes price-flash-down {
+  from {
+    background-color: var(--down-muted);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.flash-up {
+  animation: price-flash 700ms ease-out;
+}
+.flash-down {
+  animation: price-flash-down 700ms ease-out;
+}

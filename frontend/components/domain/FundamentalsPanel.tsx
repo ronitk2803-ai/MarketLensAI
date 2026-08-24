@@ -70,6 +70,7 @@ export function FundamentalsPanel({
       actions={<ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />}
       bodyClassName="p-0"
       footnote="Best-effort, single-source data — always shown at low confidence. Missing fields are omitted, never estimated."
+      fullscreenable
     >
       {!hasData ? (
         <p className="px-3 py-8 text-center text-xs text-muted-foreground">

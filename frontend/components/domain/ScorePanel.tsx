@@ -20,6 +20,7 @@ export function ScorePanel({ score, meta }: { score: Score; meta: Meta }) {
       title="Opportunity Score"
       actions={<ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />}
       footnote="Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero."
+      fullscreenable
     >
       {!hasScore ? (
         <p className="py-6 text-center text-xs text-muted-foreground">

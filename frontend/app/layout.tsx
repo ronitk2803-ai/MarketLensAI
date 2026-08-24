@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "mlai — Investment Intelligence",
+  title: "MarketLens AI — Investment Intelligence",
   description: "Discover and stress-test investment opportunities with evidence, not opinions.",
 };
 

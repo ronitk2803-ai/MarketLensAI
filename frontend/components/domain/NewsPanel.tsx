@@ -11,6 +11,7 @@ export function NewsPanel({ articles, meta }: { articles: NewsItem[]; meta: Meta
       title="News"
       actions={<ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />}
       bodyClassName="p-0"
+      fullscreenable
     >
       {articles.length === 0 ? (
         <p className="px-3 py-8 text-center text-xs text-muted-foreground">

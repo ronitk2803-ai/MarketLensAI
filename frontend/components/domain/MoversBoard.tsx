@@ -1,9 +1,12 @@
+"use client";
+
 import Link from "next/link";
 
 import { Delta } from "@/components/terminal/Delta";
 import { Panel } from "@/components/terminal/Panel";
 import { Sparkline } from "@/components/terminal/Sparkline";
 import { compact, num, price, scoreTone } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { OpportunityHit } from "@/lib/api";
 
 /**
@@ -46,8 +49,6 @@ export function MoversBoard({
   hits: OpportunityHit[];
   limit?: number;
 }) {
-  const rows = hits.slice(0, limit);
-
   return (
     <Panel
       title={title}
@@ -57,7 +58,16 @@ export function MoversBoard({
         </Link>
       }
       bodyClassName="p-0"
+      fullscreenable
     >
+      {/* Expanded, the panel has real vertical room, so cap at a much
+          higher count rather than the 6 that fits a homepage tile — the
+          fullscreen button is pointless if it doesn't also surface more of
+          what the screen actually found. */}
+      {(expanded) => {
+        const rows = hits.slice(0, expanded ? 40 : limit);
+        return (
+      <>
       {/* Flex rows rather than a table: `table-auto` sizes columns to their
           content, so the company name refuses to truncate and pushes the
           figures out of the panel instead. A flex row with `min-w-0` on the
@@ -68,14 +78,17 @@ export function MoversBoard({
           No matches right now.
         </p>
       ) : (
-        <ul className="text-[13px]">
+        <ul className={expanded ? "text-sm" : "text-[13px]"}>
           {rows.map((hit) => {
             const figures = primaryFigures(hit);
             return (
               <li key={hit.symbol} className="border-b border-border/60 last:border-0">
                 <Link
                   href={`/company/${hit.symbol}`}
-                  className="flex items-center gap-2 px-3 py-1.5 hover:bg-accent/40"
+                  className={cn(
+                    "flex items-center gap-2 px-3 hover:bg-accent/40",
+                    expanded ? "py-2.5" : "py-1.5",
+                  )}
                 >
                   {/* The ticker is the row's identifier, so it must never be
                       the thing that gives way — at the 4-up xl layout the
@@ -84,18 +97,27 @@ export function MoversBoard({
                       column's floor and the company name absorbs instead. */}
                   <span className="min-w-0 flex-1">
                     <span className="num block font-medium whitespace-nowrap">{hit.symbol}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
+                    <span
+                      className={cn(
+                        "block text-muted-foreground",
+                        expanded ? "text-xs" : "truncate text-[11px]",
+                      )}
+                    >
                       {hit.name}
                     </span>
                   </span>
-                  <Sparkline values={hit.spark} width={40} className="hidden sm:block" />
+                  <Sparkline
+                    values={hit.spark}
+                    width={expanded ? 72 : 40}
+                    className="hidden sm:block"
+                  />
                   <span className="num shrink-0 text-right whitespace-nowrap text-muted-foreground">
                     {figures.left}
                   </span>
                   <span className="shrink-0 text-right whitespace-nowrap">{figures.right}</span>
                   <span
                     className={`num w-5 shrink-0 text-right text-[11px] ${scoreTone(hit.opportunity_score)}`}
-                    title="Opportunity Score"
+                    title="Opportunity Score (0-100, research attractiveness — not a return prediction)"
                   >
                     {typeof hit.opportunity_score === "number"
                       ? hit.opportunity_score.toFixed(0)
@@ -107,6 +129,9 @@ export function MoversBoard({
           })}
         </ul>
       )}
+      </>
+        );
+      }}
     </Panel>
   );
 }

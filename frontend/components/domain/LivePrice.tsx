@@ -3,6 +3,8 @@
 import { Delta } from "@/components/terminal/Delta";
 import { price, tradingDate } from "@/lib/format";
 import { useLiveQuotes } from "@/lib/use-live-quotes";
+import { usePriceFlash } from "@/lib/use-price-flash";
+import { cn } from "@/lib/utils";
 
 /**
  * The company header's price, live while the session is trading.
@@ -34,10 +36,17 @@ export function LivePrice({
 }) {
   const live = useLiveQuotes([symbol]);
   const quote = live.isLive ? live.bySymbol[symbol] : undefined;
+  const flash = usePriceFlash(quote?.ltp);
 
   return (
     <div className="text-right">
-      <div className="num text-2xl leading-tight font-semibold">
+      <div
+        className={cn(
+          "num rounded-sm text-2xl leading-tight font-semibold transition-colors",
+          flash === "up" && "flash-up",
+          flash === "down" && "flash-down",
+        )}
+      >
         {price(quote ? quote.ltp : storedClose)}
       </div>
       <div className="flex items-center justify-end gap-2">
