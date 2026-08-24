@@ -11,12 +11,42 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # The suite is not unit-only: tests/conftest.py hands every DB test a
+    # real SQLAlchemy session, and the services under test are largely about
+    # upsert and transaction behaviour that a mocked session would not
+    # exercise. Without this service container every one of those tests
+    # fails on connection refused. Nothing here touches the network — the
+    # provider tests all use httpx MockTransport or monkeypatch — so the run
+    # stays hermetic and fast.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mlai
+          POSTGRES_PASSWORD: mlai
+          POSTGRES_DB: mlai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mlai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://mlai:mlai@localhost:5432/mlai
+
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
       - run: uv sync --group dev
       - run: uv run ruff check .
       - run: uv run mypy app
+      # Schema comes from the migrations rather than create_all, so a
+      # migration that drifts from the models fails here instead of on a
+      # production deploy, where the container runs this same command.
+      - run: uv run alembic upgrade head
       - run: uv run pytest
 
   frontend:
