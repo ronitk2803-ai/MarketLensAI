@@ -254,3 +254,19 @@ export function getWatchlistQuotes(symbols: string[], deltaDays: number[]) {
   });
   return apiFetch<WatchlistResponse>(`/watchlist/quotes?${params.toString()}`).then((e) => e.data);
 }
+
+export interface LiveQuote {
+  symbol: string;
+  exchange: string;
+  ltp: number;
+  previous_close: number | null;
+  change_pct: number | null;
+  as_of: string;
+  /** Provider's own session state, e.g. "REGULAR" | "CLOSED" | "PRE" | "POST". */
+  market_state: string | null;
+}
+
+export function getLiveQuotes(symbols: string[]) {
+  const params = new URLSearchParams({ symbols: symbols.join(",") });
+  return apiFetch<LiveQuote[]>(`/quotes?${params.toString()}`, { cache: "no-store" });
+}

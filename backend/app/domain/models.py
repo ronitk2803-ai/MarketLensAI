@@ -37,11 +37,27 @@ class Bar:
 
 @dataclass(frozen=True, slots=True)
 class Quote:
-    """A live/latest price snapshot."""
+    """A live/latest price snapshot.
+
+    `previous_close` rides along because every provider that can give an LTP
+    gives it in the same payload, and a price with no reference point is
+    close to useless on screen — deriving the day's change from stored EOD
+    bars instead would silently go wrong on exactly the days that matter
+    (a bar not yet ingested, or a corporate action between the two).
+
+    `market_state` is the provider's own word for whether the session is
+    live (e.g. "REGULAR", "CLOSED", "PRE", "POST"). Carried verbatim rather
+    than normalised to a bool: "is the market open" is a question about a
+    specific exchange's calendar and holidays, and the provider already
+    knows the answer authoritatively — recomputing it from a hardcoded
+    09:15–15:30 IST window would be wrong on every NSE holiday.
+    """
 
     asset: AssetRef
     ltp: float
     as_of: dt.datetime
+    previous_close: float | None = None
+    market_state: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

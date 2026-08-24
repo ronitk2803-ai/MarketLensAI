@@ -8,23 +8,31 @@ import { Delta } from "@/components/terminal/Delta";
 import { Panel } from "@/components/terminal/Panel";
 import { RangeBar } from "@/components/terminal/RangeBar";
 import { Sparkline } from "@/components/terminal/Sparkline";
-import type { AssetSearchResult, WatchlistQuote } from "@/lib/api";
+import type { AssetSearchResult, LiveQuote, WatchlistQuote } from "@/lib/api";
 import { price, tradingDate } from "@/lib/format";
+import { useLiveQuotes } from "@/lib/use-live-quotes";
 import { cn } from "@/lib/utils";
 import { useDeltaDays, useWatchlistSymbols } from "@/lib/watchlist-storage";
 
 /**
  * User-curated multi-symbol quote panel for the home dashboard.
  *
- * Everything here is EOD, same as the rest of the app (see the footer
- * disclosure below): "Last" is the most recent stored close, not a live
- * tick. No account system exists yet (Build_plan.md §Q: watchlist is P1),
- * so the symbol list and delta-window choice live in this browser only —
- * see lib/watchlist-storage.ts.
+ * Two different clocks meet in each row, and the UI has to keep them
+ * distinguishable. The derived columns (multi-window deltas, 52-week and
+ * all-time ranges, sparkline) come from stored EOD history and only change
+ * once a day. "Last" is live during market hours, polled from a separate
+ * lightweight endpoint — so it is labelled LIVE and shown against the
+ * previous close, and falls back to the stored close (labelled with its own
+ * date) whenever the session is shut or the provider is unreachable.
+ *
+ * No account system exists yet (Build_plan.md §Q: watchlist is P1), so the
+ * symbol list and delta-window choice live in this browser only — see
+ * lib/watchlist-storage.ts.
  */
 export function WatchlistPanel() {
   const [symbols, setSymbols] = useWatchlistSymbols();
   const [deltaDays, setDeltaDays] = useDeltaDays();
+  const live = useLiveQuotes(symbols);
   const [quotes, setQuotes] = useState<Record<string, WatchlistQuote>>({});
   const [unknown, setUnknown] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -74,9 +82,30 @@ export function WatchlistPanel() {
     setSymbols(symbols.filter((s) => s !== symbol));
   }
 
+  // Three genuinely different states, and the footnote has to tell them
+  // apart: a closing price from the provider is real and current-as-of-close
+  // (not the same claim as "the feed is down"), and neither is the same as a
+  // live tick.
+  const hasQuotes = Object.keys(live.bySymbol).length > 0;
+  const quoteSourceNote = live.isLive
+    ? "Live price from Yahoo Finance, refreshed every 15s, shown against the previous close."
+    : hasQuotes
+      ? "Market closed — showing today's closing price against the prior close."
+      : "Live prices unavailable — showing the last stored close, labelled with its own date.";
+
   return (
     <Panel
-      title="Watchlist"
+      title={
+        <div className="flex items-center gap-2">
+          <h2 className="label-caps">Watchlist</h2>
+          {live.isLive && (
+            <span className="flex items-center gap-1 text-[10px] text-up" title="Market is open — prices update every 15s">
+              <span className="size-1.5 animate-pulse rounded-full bg-up" />
+              LIVE
+            </span>
+          )}
+        </div>
+      }
       actions={
         <div className="flex items-center gap-3">
           <DeltaEditor days={deltaDays} onChange={setDeltaDays} />
@@ -84,7 +113,7 @@ export function WatchlistPanel() {
         </div>
       }
       bodyClassName="p-0"
-      footnote="Last close, not a live tick — see the Upstox note on the company page for what live pricing would take. Ranges are corporate-action adjusted; 'all-time' means since this deployment started tracking each stock, not its full listed history."
+      footnote={`${quoteSourceNote} Δ windows and ranges are end-of-day and corporate-action adjusted; 'all-time' means since this deployment started tracking each stock, not its full listed history.`}
     >
       {symbols.length === 0 ? (
         <p className="px-3 py-8 text-center text-xs text-muted-foreground">
@@ -114,6 +143,7 @@ export function WatchlistPanel() {
                   key={symbol}
                   symbol={symbol}
                   quote={quotes[symbol]}
+                  liveQuote={live.bySymbol[symbol]}
                   isUnknown={unknown.includes(symbol)}
                   deltaDays={deltaDays}
                   onRemove={() => removeSymbol(symbol)}
@@ -135,12 +165,14 @@ export function WatchlistPanel() {
 function WatchlistRow({
   symbol,
   quote,
+  liveQuote,
   isUnknown,
   deltaDays,
   onRemove,
 }: {
   symbol: string;
   quote: WatchlistQuote | undefined;
+  liveQuote: LiveQuote | undefined;
   isUnknown: boolean;
   deltaDays: [number, number, number];
   onRemove: () => void;
@@ -189,11 +221,30 @@ function WatchlistRow({
       <td className="px-2 py-2">
         <Sparkline values={quote.spark} />
       </td>
+      {/* Live LTP when the session is trading, otherwise the stored close.
+          The subline always says which one you're looking at — an
+          unlabelled price is the one thing this panel must never show,
+          since a stale number and a live number look identical. */}
       <td className="px-2 py-2 text-right">
-        <span className="num block whitespace-nowrap">{price(quote.close)}</span>
-        <span className="block text-[10px] text-muted-foreground">
-          {tradingDate(quote.as_of)}
-        </span>
+        {liveQuote ? (
+          <>
+            <span className="num block whitespace-nowrap">{price(liveQuote.ltp)}</span>
+            <span className="block text-[10px] whitespace-nowrap">
+              {liveQuote.change_pct === null ? (
+                <span className="text-muted-foreground">live</span>
+              ) : (
+                <Delta value={liveQuote.change_pct} digits={2} showIcon={false} />
+              )}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="num block whitespace-nowrap">{price(quote.close)}</span>
+            <span className="block text-[10px] text-muted-foreground">
+              {tradingDate(quote.as_of)}
+            </span>
+          </>
+        )}
       </td>
       {deltaDays.map((d, i) => (
         <td key={`${d}-${i}`} className="px-2 py-2 text-right">
