@@ -8,7 +8,7 @@ from app.db.models import Asset, FinancialMetric, FinancialStatement
 from app.domain.models import AssetRef, Ratios, Statements
 from app.providers.errors import ProviderError
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
-from app.services.fundamentals import get_or_fetch_ratios, get_or_fetch_statements
+from app.services.fundamentals import FUNDAMENTALS_TTL, get_or_fetch_ratios, get_or_fetch_statements
 
 
 def _make_asset(db: Session, symbol: str = "ZZFUND1") -> Asset:
@@ -59,6 +59,95 @@ def test_get_or_fetch_ratios_uses_stored_rows_without_calling_provider(
     rows = get_or_fetch_ratios(db, asset)
     assert len(rows) == 1
     assert rows[0].metric == "beta"
+
+
+def test_get_or_fetch_ratios_refetches_once_the_cache_is_older_than_the_ttl(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: the cache had no expiry at all before this — a
+    company viewed once kept the ratios from that first fetch forever, even
+    though several (P/E, P/B, market cap) are price-dependent and genuinely
+    change every session. Build_plan.md §I documents "fundamentals
+    quarterly" as the intended TTL; this pins that FUNDAMENTALS_TTL is what
+    actually governs the cache, not just documentation."""
+    asset = _make_asset(db)
+    stale_as_of = dt.datetime.now(dt.UTC) - FUNDAMENTALS_TTL - dt.timedelta(days=1)
+    db.add(
+        FinancialMetric(
+            asset_id=asset.id,
+            metric="beta",
+            value=Decimal("0.157"),
+            source="yfinance_fundamentals",
+            confidence="low",
+            as_of=stale_as_of,
+        )
+    )
+    db.flush()
+
+    fresh_ratios = Ratios(
+        asset=AssetRef(symbol="ZZFUND1", exchange="NSE"),
+        as_of=dt.date.today(),
+        values={"beta": 0.2, "trailingPE": 23.7},
+    )
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_ratios", lambda *a, **k: fresh_ratios)
+
+    rows = get_or_fetch_ratios(db, asset)
+
+    assert {r.metric: float(r.value) for r in rows} == {"beta": 0.2, "trailingPE": 23.7}
+
+
+def test_get_or_fetch_ratios_within_the_ttl_does_not_refetch(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = _make_asset(db)
+    fresh_as_of = dt.datetime.now(dt.UTC) - dt.timedelta(days=1)
+    db.add(
+        FinancialMetric(
+            asset_id=asset.id,
+            metric="beta",
+            value=Decimal("0.157"),
+            source="yfinance_fundamentals",
+            confidence="low",
+            as_of=fresh_as_of,
+        )
+    )
+    db.flush()
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("should not refetch — cache is within the TTL")
+
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_ratios", _boom)
+
+    rows = get_or_fetch_ratios(db, asset)
+    assert len(rows) == 1 and rows[0].metric == "beta"
+
+
+def test_get_or_fetch_ratios_falls_back_to_stale_rows_when_the_refetch_fails(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient Yahoo outage hitting a scheduled refresh must not blank
+    out ratios that were fine yesterday — stale-but-real beats nothing."""
+    asset = _make_asset(db)
+    stale_as_of = dt.datetime.now(dt.UTC) - FUNDAMENTALS_TTL - dt.timedelta(days=1)
+    db.add(
+        FinancialMetric(
+            asset_id=asset.id,
+            metric="beta",
+            value=Decimal("0.157"),
+            source="yfinance_fundamentals",
+            confidence="low",
+            as_of=stale_as_of,
+        )
+    )
+    db.flush()
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise ProviderError("yfinance_fundamentals", "simulated outage")
+
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_ratios", fail)
+
+    rows = get_or_fetch_ratios(db, asset)
+    assert len(rows) == 1 and rows[0].metric == "beta"
 
 
 def test_get_or_fetch_ratios_returns_empty_when_provider_fails(
@@ -133,6 +222,37 @@ def test_get_or_fetch_statements_uses_stored_rows_without_calling_provider(
 
     rows = get_or_fetch_statements(db, asset, "income", "FY")
     assert len(rows) == 1
+
+
+def test_get_or_fetch_statements_refetches_once_stale_and_falls_back_on_failure(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = _make_asset(db)
+    stale_as_of = dt.datetime.now(dt.UTC) - FUNDAMENTALS_TTL - dt.timedelta(days=1)
+    db.add(
+        FinancialStatement(
+            asset_id=asset.id,
+            period_type="FY",
+            period_end=dt.date(2025, 3, 31),
+            statement_type="income",
+            line_item="netIncome",
+            value=Decimal("352620000000"),
+            source="yfinance_fundamentals",
+            confidence="low",
+            as_of=stale_as_of,
+        )
+    )
+    db.flush()
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise ProviderError("yfinance_fundamentals", "simulated outage")
+
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_all_statements", fail)
+
+    # Stale + refetch fails -> falls back to the stale row rather than
+    # blanking the panel.
+    rows = get_or_fetch_statements(db, asset, "income", "FY")
+    assert len(rows) == 1 and rows[0].period_end == dt.date(2025, 3, 31)
 
 
 def test_get_or_fetch_statements_returns_empty_when_provider_fails(

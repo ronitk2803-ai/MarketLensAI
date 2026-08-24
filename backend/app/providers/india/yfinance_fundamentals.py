@@ -39,6 +39,14 @@ RATIO_FIELDS = [
     "forwardPE",
     "trailingPE",
     "beta",
+    "marketCap",
+    "sharesOutstanding",
+    # "Shares available for trading" — the free float, i.e. shares actually
+    # held by the public and tradeable, as opposed to sharesOutstanding
+    # (the full share count, including promoter/founder holdings that
+    # rarely trade). Verified live across RELIANCE/TCS/INFY/GVT&D/E2E —
+    # both fields resolve for companies spanning large- to small-cap.
+    "floatShares",
 ]
 
 STATEMENT_LINE_FIELDS = {

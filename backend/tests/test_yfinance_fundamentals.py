@@ -251,3 +251,20 @@ def test_provider_get_all_statements_rejects_unsupported_combo() -> None:
     provider = YFinanceFundamentalDataProvider(session=session)
     with pytest.raises(ProviderError):
         provider.get_all_statements(RELIANCE, "income", "10Y")
+
+
+def test_parse_ratios_extracts_market_cap_and_share_counts() -> None:
+    body = {
+        "financialData": {},
+        "defaultKeyStatistics": {
+            "sharesOutstanding": {"raw": 13532472634, "fmt": "13.53B"},
+            "floatShares": {"raw": 6638895750, "fmt": "6.64B"},
+        },
+        "summaryDetail": {"marketCap": {"raw": 17724833005568, "fmt": "17.72T"}},
+    }
+
+    ratios = parse_ratios(RELIANCE, body)
+
+    assert ratios.values["marketCap"] == 17724833005568
+    assert ratios.values["sharesOutstanding"] == 13532472634
+    assert ratios.values["floatShares"] == 6638895750

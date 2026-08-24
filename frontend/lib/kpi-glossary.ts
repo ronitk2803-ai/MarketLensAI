@@ -37,6 +37,14 @@ export const KPI_GLOSSARY: Record<string, string> = {
     "Net income ÷ total assets. How efficiently the company turns everything it owns — not just shareholder capital, but borrowed money too — into profit. Less sensitive to leverage than ROE, which makes it a useful cross-check against it.",
   beta:
     "How much this stock has historically moved relative to the broader market. Above 1 means it has tended to swing more than the market (in both directions); below 1, less. It's a measure of historical volatility relative to the market, not a prediction of future risk or return.",
+  marketCap:
+    "Share price × total shares outstanding — what it would cost, at the current price, to buy every share of the company. The standard measure of company size used to compare businesses regardless of their individual share price.",
+  sharesOutstanding:
+    "The total number of shares the company has issued. Includes shares held by promoters/founders and large strategic holders, not just what trades day to day — for that, see free float.",
+  floatShares:
+    "Free float: the shares actually held by the public and available to trade, excluding promoter/founder and other strategic holdings that rarely change hands. A small float relative to shares outstanding means fewer shares are really liquid, which can make the price move more sharply on modest buying or selling.",
+  marketCapCategory:
+    "Large/Mid/Small-cap, from market cap against fixed rupee thresholds — a common shorthand, not SEBI's official classification. SEBI ranks every listed company by market cap and re-publishes the large/mid/small cutoffs by rank (top 100 / next 150 / the rest) twice a year; this app doesn't rank the whole listed market, so this is an approximation for a quick sense of scale, not the regulatory ranking.",
 
   // Technical panel — same "explain the jargon, don't grade it" rule.
   dma: "Simple moving average of the closing price over the last N sessions — the average smoothed to filter out day-to-day noise. Price above its DMA is often read as an uptrend, below as a downtrend; the more sessions in the average, the slower it reacts to recent moves.",

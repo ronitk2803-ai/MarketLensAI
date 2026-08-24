@@ -1,7 +1,9 @@
 import { KpiLabel } from "@/components/domain/KpiLabel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { Panel } from "@/components/terminal/Panel";
-import { DASH } from "@/lib/format";
+import { crores, croreShares, DASH } from "@/lib/format";
+import { marketCapCategory, marketCapCategoryTone } from "@/lib/market-cap";
+import { cn } from "@/lib/utils";
 import type { Fundamentals, Meta } from "@/lib/api";
 
 const RATIO_LABELS: Record<string, string> = {
@@ -17,6 +19,9 @@ const RATIO_LABELS: Record<string, string> = {
   forwardPE: "Forward P/E",
   trailingPE: "P/E (TTM)",
   beta: "Beta",
+  marketCap: "Market cap",
+  sharesOutstanding: "Shares outstanding",
+  floatShares: "Free float",
 };
 
 const PERCENT_METRICS = new Set([
@@ -29,6 +34,13 @@ const PERCENT_METRICS = new Set([
   "returnOnAssets",
 ]);
 
+// These three ride in on the same ratios array as P/E, ROE etc. (same
+// provider payload, same cache) but read as rupee/share-count figures, not
+// small decimals or percentages, so they need their own formatting branch
+// rather than falling into formatRatio's percent-or-two-decimals default.
+const RUPEE_SCALE_METRICS = new Set(["marketCap"]);
+const SHARE_COUNT_METRICS = new Set(["sharesOutstanding", "floatShares"]);
+
 const LINE_ITEM_LABELS: Record<string, string> = {
   totalRevenue: "Revenue",
   netIncome: "Net income",
@@ -38,13 +50,10 @@ const LINE_ITEM_LABELS: Record<string, string> = {
 };
 
 function formatRatio(metric: string, value: number): string {
+  if (RUPEE_SCALE_METRICS.has(metric)) return crores(value);
+  if (SHARE_COUNT_METRICS.has(metric)) return croreShares(value);
   if (PERCENT_METRICS.has(metric)) return `${(value * 100).toFixed(1)}%`;
   return value.toFixed(2);
-}
-
-function formatCrores(value: number): string {
-  // Values arrive in raw rupees; ₹1 crore = 1e7.
-  return `₹${(value / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 0 })} Cr`;
 }
 
 export function FundamentalsPanel({
@@ -65,6 +74,12 @@ export function FundamentalsPanel({
     new Set(fundamentals.income_statement.flatMap((p) => Object.keys(p.line_items))),
   );
 
+  // Derived client-side from marketCap rather than sent by the backend: a
+  // pure function of a number already on the page, so there is no reason
+  // to round-trip it through an API for a purely presentational badge.
+  const marketCap = fundamentals.ratios.find((r) => r.metric === "marketCap")?.value ?? null;
+  const capCategory = marketCapCategory(marketCap);
+
   return (
     <Panel
       title="Fundamentals"
@@ -81,6 +96,14 @@ export function FundamentalsPanel({
         <div className="flex flex-col">
           {fundamentals.ratios.length > 0 && (
             <div className="grid grid-cols-2 gap-y-3 p-3 sm:grid-cols-4 lg:grid-cols-6">
+              {capCategory && (
+                <div className="flex flex-col gap-0.5 border-l border-border px-3 first:border-l-0 first:pl-0">
+                  <KpiLabel metric="marketCapCategory" label="Cap size" />
+                  <span className={cn("num text-sm font-medium", marketCapCategoryTone(capCategory))}>
+                    {capCategory}
+                  </span>
+                </div>
+              )}
               {fundamentals.ratios.map((r) => (
                 <div
                   key={r.metric}
@@ -114,9 +137,7 @@ export function FundamentalsPanel({
                       <td className="num px-3 py-1.5">{period.period_end}</td>
                       {lineItemKeys.map((key) => (
                         <td key={key} className="num py-1.5 pr-3 text-right whitespace-nowrap">
-                          {key in period.line_items
-                            ? formatCrores(period.line_items[key])
-                            : DASH}
+                          {key in period.line_items ? crores(period.line_items[key]) : DASH}
                         </td>
                       ))}
                     </tr>

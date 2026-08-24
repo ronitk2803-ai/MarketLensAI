@@ -33,6 +33,22 @@ export function compact(value: number | null | undefined): string {
   return value == null ? DASH : COMPACT.format(value);
 }
 
+/** Raw rupees -> "₹X,XX,XXX Cr" (1 crore = 1e7), en-IN grouped — the
+ * standard Indian convention for company-scale rupee figures (revenue,
+ * net income, market cap), where the Western "T"/"B" from `compact()`
+ * isn't how these numbers are normally read here. */
+export function crores(value: number | null | undefined): string {
+  if (value == null) return DASH;
+  return `₹${(value / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 0 })} Cr`;
+}
+
+/** Raw share count -> "X.XX Cr" — same crore convention as `crores()`, but
+ * for a share count rather than a rupee amount, so no ₹ prefix. */
+export function croreShares(value: number | null | undefined): string {
+  if (value == null) return DASH;
+  return (value / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+
 /**
  * Direction classes for a change value. `null` deliberately maps to the
  * neutral tone rather than to "down" — unknown is not a decline.

@@ -8,6 +8,7 @@ uncross-checked source (Yahoo/yfinance tier) — Build_plan.md §6 reserves
 than the source actually earns.
 """
 
+import datetime as dt
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -22,17 +23,39 @@ from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataPro
 SOURCE = "yfinance_fundamentals"
 CONFIDENCE = "low"
 
+# Build_plan.md §I's documented TTL table: "fundamentals quarterly." The
+# original cache had no expiry at all (`if rows: return rows`, forever) —
+# found live: several of these ratios are price-dependent (P/E, P/B, market
+# cap) and move every session, yet a company viewed once kept showing the
+# ratios from that first view indefinitely, and a code fix that corrected
+# what gets fetched (e.g. adding a missing field) would never reach an
+# already-cached company without a manual cache clear.
+FUNDAMENTALS_TTL = dt.timedelta(days=90)
+
+
+def _is_stale(rows: list[FinancialMetric] | list[FinancialStatement]) -> bool:
+    if not rows:
+        return True
+    newest = max(r.as_of for r in rows)
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=dt.UTC)
+    return (dt.datetime.now(dt.UTC) - newest) >= FUNDAMENTALS_TTL
+
 
 def get_or_fetch_ratios(db: Session, asset: Asset) -> list[FinancialMetric]:
     rows = db.query(FinancialMetric).filter_by(asset_id=asset.id).all()
-    if rows:
+    if rows and not _is_stale(rows):
         return rows
 
     asset_ref = AssetRef(symbol=asset.symbol, exchange=asset.exchange, market=asset.market)
     try:
         ratios = YFinanceFundamentalDataProvider().get_ratios(asset_ref)
     except ProviderError:
-        return []
+        # Stale-but-real beats nothing: a transient Yahoo outage on the
+        # refresh attempt must not blank out ratios that were fine an hour
+        # ago. Only a genuine first-ever fetch failure (no rows at all)
+        # legitimately returns empty.
+        return rows
 
     rows_to_write = [
         {
@@ -64,6 +87,15 @@ def get_or_fetch_ratios(db: Session, asset: Asset) -> list[FinancialMetric]:
             )
         )
         db.flush()
+        # The upsert above is a raw SQL statement, not an ORM update — it
+        # never touches the identity map, so any FinancialMetric object
+        # already loaded into this session (a metric that existed and just
+        # got refreshed, not one being inserted for the first time) still
+        # holds its pre-refresh attribute values. Only became reachable
+        # once rows could actually be refreshed at all (added alongside
+        # FUNDAMENTALS_TTL) — verified live: a stale `beta` upsert to a new
+        # value came back from this function as the old value, silently.
+        db.expire_all()
     return db.query(FinancialMetric).filter_by(asset_id=asset.id).all()
 
 
@@ -76,7 +108,7 @@ def get_or_fetch_statements(
         .order_by(FinancialStatement.period_end.desc())
         .all()
     )
-    if rows:
+    if rows and not _is_stale(rows):
         return rows
 
     asset_ref = AssetRef(symbol=asset.symbol, exchange=asset.exchange, market=asset.market)
@@ -85,7 +117,8 @@ def get_or_fetch_statements(
             asset_ref, statement_type, period
         )
     except ProviderError:
-        return []
+        # Stale-but-real beats nothing — see get_or_fetch_ratios.
+        return rows
 
     rows_to_write = [
         {
@@ -117,6 +150,11 @@ def get_or_fetch_statements(
             )
         )
         db.flush()
+        # See the matching comment in get_or_fetch_ratios — the raw-SQL
+        # upsert bypasses the identity map, so an already-loaded row that
+        # just got refreshed would otherwise come back with its stale
+        # pre-refresh value.
+        db.expire_all()
     return (
         db.query(FinancialStatement)
         .filter_by(asset_id=asset.id, statement_type=statement_type, period_type=period)
