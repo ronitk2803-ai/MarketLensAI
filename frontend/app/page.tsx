@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { MoversBoard } from "@/components/domain/MoversBoard";
+import { WatchlistPanel } from "@/components/domain/WatchlistPanel";
 import { Panel } from "@/components/terminal/Panel";
 import { getOpportunities } from "@/lib/api";
 import { tradingDate } from "@/lib/format";
@@ -62,6 +63,8 @@ export default async function Home() {
           </span>
         </div>
       </div>
+
+      <WatchlistPanel />
 
       {totalHits === 0 ? (
         <Panel>

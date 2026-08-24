@@ -219,3 +219,38 @@ export function getTechnicals(symbol: string, range: PriceRange = "1y") {
     next: { revalidate: 60 },
   });
 }
+
+
+export interface WatchlistRangeStat {
+  high: number;
+  low: number;
+  /** 0..1 position of the latest close between low and high; null if flat. */
+  position: number | null;
+  since: string;
+}
+
+export interface WatchlistQuote {
+  symbol: string;
+  exchange: string;
+  name: string;
+  as_of: string | null;
+  close: number | null;
+  /** Keyed by the requested trading-session window, e.g. "7" -> +4.2. */
+  deltas: Record<string, number>;
+  all_time: WatchlistRangeStat | null;
+  week_52: WatchlistRangeStat | null;
+  spark: number[];
+}
+
+export interface WatchlistResponse {
+  quotes: WatchlistQuote[];
+  unknown_symbols: string[];
+}
+
+export function getWatchlistQuotes(symbols: string[], deltaDays: number[]) {
+  const params = new URLSearchParams({
+    symbols: symbols.join(","),
+    deltas: deltaDays.join(","),
+  });
+  return apiFetch<WatchlistResponse>(`/watchlist/quotes?${params.toString()}`).then((e) => e.data);
+}
