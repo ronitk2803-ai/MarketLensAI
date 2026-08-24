@@ -47,6 +47,27 @@ SAMPLE_INSTRUMENTS = [
 ]
 
 
+def test_parse_equity_instruments_includes_be_series() -> None:
+    """Regression test: E2E Networks (trading_symbol "E2E") trades in NSE's
+    BE series, and the original filter accepted only instrument_type "EQ",
+    silently dropping it (and any other BE-series stock) before it ever
+    became an Asset row. nse_bhavcopy.EQUITY_SERIES already treats BE as
+    ordinary equity — this filter has to agree with that, not just EQ."""
+    be_stock = {
+        "segment": "NSE_EQ",
+        "name": "E2E NETWORKS LIMITED",
+        "exchange": "NSE",
+        "isin": "INE255Z01027",
+        "instrument_type": "BE",
+        "instrument_key": "NSE_EQ|INE255Z01027",
+        "trading_symbol": "E2E",
+    }
+
+    instruments = parse_equity_instruments(json.dumps([*SAMPLE_INSTRUMENTS, be_stock]))
+
+    assert any(i.trading_symbol == "E2E" for i in instruments)
+
+
 def test_parse_equity_instruments_filters_to_nse_eq_only() -> None:
     instruments = parse_equity_instruments(json.dumps(SAMPLE_INSTRUMENTS))
     assert instruments == [

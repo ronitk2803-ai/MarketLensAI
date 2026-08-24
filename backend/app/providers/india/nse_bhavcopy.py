@@ -67,6 +67,19 @@ def _parse_float(raw: str) -> float | None:
 
 
 def parse_bhavcopy(raw_csv: str) -> list[BhavcopyRow]:
+    # Verified live on a 5-year backfill: NSE's archive served 2022-08-08's
+    # file as a genuine .xlsx (an Office Open XML zip) with a `text/csv`
+    # Content-Type and a `.csv` URL, rather than the plain CSV every
+    # neighbouring day gets. Handed to `csv.DictReader`, the binary zip
+    # bytes surfaced as an opaque "new-line character seen in unquoted
+    # field" — the true cause (a mislabelled response) is unrecoverable
+    # from that message alone, so it's detected explicitly here instead of
+    # left for the CSV parser to fail on cryptically.
+    if raw_csv.startswith("PK\x03\x04"):
+        raise ProviderError(
+            "nse_bhavcopy",
+            "response is a zip/xlsx archive, not CSV — NSE mislabelled this file",
+        )
     reader = csv.DictReader(io.StringIO(raw_csv), skipinitialspace=True)
     rows = []
     for record in reader:

@@ -41,6 +41,7 @@ def backfill_history(
 
     total_trading_days = 0
     total_bars = 0
+    total_errored = 0
 
     chunk_start = start
     while chunk_start <= end:
@@ -53,13 +54,17 @@ def backfill_history(
 
         total_trading_days += result.trading_days_found
         total_bars += result.bars_persisted
+        total_errored += result.days_errored
         logger.info(
-            "backfill_history: %s..%s -> %d trading days, %d bars (running total %d)",
+            "backfill_history: %s..%s -> %d trading days, %d bars, %d errored "
+            "(running total %d bars, %d errored)",
             chunk_start,
             chunk_end,
             result.trading_days_found,
             result.bars_persisted,
+            result.days_errored,
             total_bars,
+            total_errored,
         )
         chunk_start = chunk_end + dt.timedelta(days=1)
 

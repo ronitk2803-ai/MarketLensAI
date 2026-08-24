@@ -27,6 +27,18 @@ HISTORICAL_CANDLE_URL = (
     "https://api.upstox.com/v2/historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}"
 )
 
+# Matches nse_bhavcopy.EQUITY_SERIES. Verified live: filtering to "EQ" alone
+# silently dropped every BE-series stock from the universe before it ever
+# became an Asset row — found while investigating a user report that E2E
+# Networks (trading_symbol "E2E", instrument_type "BE") was unsearchable.
+# E2E itself isn't a Nifty 500 constituent, so its absence was actually
+# correct for this app's current scope, but the underlying filter bug is
+# real: today it happens to affect zero of the 500 real constituents (all
+# currently trade EQ), so nothing already seeded needs correcting, but the
+# next Nifty 500 rebalance — or `--index all` — could silently lose a
+# legitimate stock the same way.
+_EQUITY_INSTRUMENT_TYPES = {"EQ", "BE"}
+
 _SUPPORTED_INTERVALS = {"day", "week", "month"}
 
 
@@ -58,7 +70,10 @@ def parse_equity_instruments(raw_json: bytes | str) -> list[UpstoxInstrument]:
     records = json.loads(raw_json)
     instruments = []
     for record in records:
-        if record.get("segment") != "NSE_EQ" or record.get("instrument_type") != "EQ":
+        if (
+            record.get("segment") != "NSE_EQ"
+            or record.get("instrument_type") not in _EQUITY_INSTRUMENT_TYPES
+        ):
             continue
         instruments.append(
             UpstoxInstrument(

@@ -10,14 +10,18 @@ so that job can reuse it directly rather than duplicating the logic.
 """
 
 import datetime as dt
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset
 from app.domain.models import Bar
+from app.providers.errors import ProviderError
 from app.providers.india.nse_bhavcopy import BhavcopyRow, NSEBhavcopyProvider
 from app.services.prices import persist_bars
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +29,7 @@ class BackfillResult:
     trading_days_found: int
     days_checked: int
     bars_persisted: int
+    days_errored: int = 0
 
 
 def _bhavcopy_row_to_bar(row: BhavcopyRow) -> Bar:
@@ -56,10 +61,23 @@ def backfill_universe_from_bhavcopy(
     bars_by_asset: dict[int, list[Bar]] = {}
     trading_days_found = 0
     days_checked = 0
+    days_errored = 0
     current = start
     while current <= end:
         days_checked += 1
-        day_rows = provider.get_day_bars(current)
+        try:
+            day_rows = provider.get_day_bars(current)
+        except ProviderError:
+            # One bad day (verified live: NSE's own archive occasionally
+            # mislabels a file — see nse_bhavcopy.parse_bhavcopy) must not
+            # cost every other day in this chunk. Before this, a single
+            # unhandled day meant `bars_by_asset` never reached the persist
+            # loop below, so a 5-year backfill silently lost 3 years of
+            # otherwise-good data to one anomalous date in the middle.
+            days_errored += 1
+            logger.warning("backfill: skipping %s after a provider error", current, exc_info=True)
+            current += dt.timedelta(days=1)
+            continue
         if day_rows:
             trading_days_found += 1
         for row in day_rows:
@@ -78,4 +96,5 @@ def backfill_universe_from_bhavcopy(
         trading_days_found=trading_days_found,
         days_checked=days_checked,
         bars_persisted=bars_persisted,
+        days_errored=days_errored,
     )

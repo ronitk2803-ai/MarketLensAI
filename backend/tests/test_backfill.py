@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset, PriceOHLCV
+from app.providers.errors import ProviderError
 from app.providers.india.nse_bhavcopy import BhavcopyRow, NSEBhavcopyProvider
 from app.services.backfill import backfill_universe_from_bhavcopy
 
@@ -84,3 +85,57 @@ def test_backfill_is_idempotent_on_rerun(db: Session) -> None:
 
     rows = db.query(PriceOHLCV).filter_by(asset_id=asset.id).all()
     assert len(rows) == 1
+
+
+class FlakyBhavcopyProvider(NSEBhavcopyProvider):
+    """Raises ProviderError for one specific date, as NSE's own archive did
+    live on 2022-08-08 by serving a mislabelled .xlsx instead of a CSV."""
+
+    def __init__(self, day_data: dict[dt.date, list[BhavcopyRow]], bad_date: dt.date) -> None:
+        self._day_data = day_data
+        self._bad_date = bad_date
+
+    def get_day_bars(self, date: dt.date) -> list[BhavcopyRow]:
+        if date == self._bad_date:
+            raise ProviderError("nse_bhavcopy", "simulated mislabelled response")
+        return self._day_data.get(date, [])
+
+
+def test_backfill_skips_a_single_bad_day_rather_than_losing_the_whole_range(
+    db: Session,
+) -> None:
+    """Regression test for a real incident: a 5-year backfill hit one
+    anomalous NSE file in the middle of a 30-day chunk and, before this fix,
+    the unhandled exception meant `bars_by_asset` never reached the persist
+    loop — losing every other day in that chunk, not just the bad one."""
+    asset = Asset(symbol="ZZFILL4", exchange="NSE", market="IN", name="Flaky Range Co")
+    db.add(asset)
+    db.flush()
+
+    good1, bad, good2 = dt.date(2026, 1, 5), dt.date(2026, 1, 6), dt.date(2026, 1, 7)
+    provider = FlakyBhavcopyProvider(
+        {good1: [_row("ZZFILL4", good1, 100.0)], good2: [_row("ZZFILL4", good2, 102.0)]},
+        bad_date=bad,
+    )
+
+    result = backfill_universe_from_bhavcopy(db, good1, good2, provider=provider)
+
+    assert result.days_errored == 1
+    assert result.bars_persisted == 2
+    stored_dates = {
+        row.date for row in db.query(PriceOHLCV).filter_by(asset_id=asset.id).all()
+    }
+    assert stored_dates == {good1, good2}
+
+
+def test_backfill_result_reports_zero_errors_on_a_clean_run(db: Session) -> None:
+    asset = Asset(symbol="ZZFILL5", exchange="NSE", market="IN", name="Clean Co")
+    db.add(asset)
+    db.flush()
+
+    day = dt.date(2026, 1, 5)
+    provider = FakeBhavcopyProvider({day: [_row("ZZFILL5", day, 100.0)]})
+
+    result = backfill_universe_from_bhavcopy(db, day, day, provider=provider)
+
+    assert result.days_errored == 0
