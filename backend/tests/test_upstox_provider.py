@@ -84,8 +84,11 @@ RELIANCE = AssetRef(symbol="RELIANCE", exchange="NSE")
 
 
 def _token_manager_with_token() -> UpstoxTokenManager:
+    # Deliberately no obtained_at — these tests need a token that is live
+    # whenever the suite runs. Pinning a date made them expire at 03:30 IST
+    # the morning after they were written.
     manager = UpstoxTokenManager()
-    manager.set_token("tok_live", obtained_at=dt.datetime(2026, 8, 23, 9, 0, tzinfo=IST))
+    manager.set_token("tok_live")
     return manager
 
 

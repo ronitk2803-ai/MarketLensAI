@@ -26,8 +26,14 @@ def test_get_token_raises_when_never_set() -> None:
 
 
 def test_set_token_then_get_token_returns_it() -> None:
+    # No explicit obtained_at: this asserts a *live* token is usable, so it
+    # must not pin a date. It previously hardcoded 2026-08-23 09:00 IST,
+    # whose token expired at 03:30 the next morning — the test passed on the
+    # day it was written and started failing at 03:30 IST the day after.
+    # Defaulting to now is always valid by construction, since _next_expiry
+    # returns the next 03:30 boundary strictly after the moment given.
     manager = UpstoxTokenManager()
-    manager.set_token("abc123", obtained_at=dt.datetime(2026, 8, 23, 9, 0, tzinfo=IST))
+    manager.set_token("abc123")
     assert manager.get_token() == "abc123"
     assert manager.is_valid()
 
@@ -73,3 +79,24 @@ def test_exchange_code_for_token_upstream_error(configured_upstox_credentials: N
 def test_exchange_code_for_token_not_configured() -> None:
     with pytest.raises(ProviderError):
         exchange_code_for_token("some-code")
+
+
+@pytest.mark.parametrize("hour", range(24))
+@pytest.mark.parametrize("minute", [0, 29, 30, 31, 59])
+def test_a_freshly_obtained_token_is_valid_whatever_the_time_of_day(
+    hour: int, minute: int
+) -> None:
+    """`_next_expiry` must always land strictly after the moment given.
+
+    This is the invariant that lets tests (and callers) do `set_token(tok)`
+    and rely on the result being usable. It matters most around the 03:30
+    IST rollover, where an off-by-one would hand back an already-expired
+    token — the failure that took out two tests overnight when they pinned
+    a fixed obtained_at instead.
+    """
+    obtained_at = dt.datetime(2026, 8, 24, hour, minute, tzinfo=IST)
+    manager = UpstoxTokenManager()
+    manager.set_token("abc123", obtained_at=obtained_at)
+
+    assert manager._expires_at is not None
+    assert manager._expires_at > obtained_at
