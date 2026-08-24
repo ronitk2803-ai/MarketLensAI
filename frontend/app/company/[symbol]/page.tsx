@@ -3,11 +3,11 @@ import { notFound } from "next/navigation";
 
 import { PriceChart } from "@/components/charts/PriceChart";
 import { FundamentalsPanel } from "@/components/domain/FundamentalsPanel";
+import { LivePrice } from "@/components/domain/LivePrice";
 import { NewsPanel } from "@/components/domain/NewsPanel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { ScorePanel } from "@/components/domain/ScorePanel";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
-import { Delta } from "@/components/terminal/Delta";
 import { Panel } from "@/components/terminal/Panel";
 import { cn } from "@/lib/utils";
 import { compact, price, tradingDate } from "@/lib/format";
@@ -96,26 +96,34 @@ export default async function CompanyPage({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-          <div className="hidden items-center gap-x-5 sm:flex">
+          {/* Dated explicitly: once the price beside it goes live, this is
+              the only thing saying which session the OHLC belongs to — and
+              on any day before the 20:00 IST ingestion runs, that session
+              is not today. */}
+          <div
+            className="hidden items-center gap-x-5 sm:flex"
+            title={`Session of ${tradingDate(latestBar?.date ?? null)}`}
+          >
             {sessionStats.map((stat) => (
               <div key={stat.label} className="text-right">
                 <div className="label-caps">{stat.label}</div>
                 <div className="num text-[13px]">{stat.value}</div>
               </div>
             ))}
+            <div className="text-right">
+              <div className="label-caps">Session</div>
+              <div className="num text-[13px] text-muted-foreground">
+                {tradingDate(latestBar?.date ?? null)}
+              </div>
+            </div>
           </div>
 
-          <div className="text-right">
-            <div className="num text-2xl leading-tight font-semibold">
-              {price(header.latest_price.close)}
-            </div>
-            <div className="flex items-center justify-end gap-2">
-              <Delta value={changePct} className="text-[13px]" />
-              <span className="text-[10px] text-muted-foreground">
-                {tradingDate(header.latest_price.date)}
-              </span>
-            </div>
-          </div>
+          <LivePrice
+            symbol={header.symbol}
+            storedClose={header.latest_price.close}
+            storedChangePct={changePct}
+            storedDate={header.latest_price.date}
+          />
 
           <ProvenanceBadge
             source={company.meta.source}
