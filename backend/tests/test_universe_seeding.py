@@ -204,6 +204,43 @@ def test_sync_creates_industries_and_links_companies(db: Session) -> None:
     assert company.industry.code == "financial-services"
 
 
+def test_sync_assigns_score_profile_keys_from_the_industry_map(db: Session) -> None:
+    """sync_company_industries is the only thing that ever writes Industry
+    rows, so it's the only place score_profile_key can be kept correct."""
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    members = [
+        _constituent_with_industry("ZZTEST1", "INE002A01018", "Financial Services"),
+        _constituent_with_industry("ZZTEST2", "INE467B01029", "Information Technology"),
+    ]
+
+    sync_company_industries(db, members)
+
+    financials = db.query(Industry).filter_by(code="financial-services").one()
+    assert financials.score_profile_key == "financials"
+    # Unmapped industries stay on default — profiles are seeded only where
+    # a component is structurally invalid, not for every sector.
+    it = db.query(Industry).filter_by(code="information-technology").one()
+    assert it.score_profile_key == "default"
+
+
+def test_sync_reapplies_score_profile_key_to_an_existing_industry(db: Session) -> None:
+    """A reseed must not leave score_profile_key frozen at whatever it was
+    when the row was first created — otherwise adding an industry to the
+    map would silently never take effect."""
+    seed_assets_from_upstox_instruments(db, INSTRUMENTS)
+    members = [_constituent_with_industry("ZZTEST1", "INE002A01018", "Financial Services")]
+    sync_company_industries(db, members)
+
+    industry = db.query(Industry).filter_by(code="financial-services").one()
+    industry.score_profile_key = "default"  # simulate a row seeded before the map existed
+    db.flush()
+
+    sync_company_industries(db, members)
+
+    db.refresh(industry)
+    assert industry.score_profile_key == "financials"
+
+
 def test_sync_reuses_an_existing_industry_row(db: Session) -> None:
     seed_assets_from_upstox_instruments(db, INSTRUMENTS)
     members = [

@@ -275,6 +275,13 @@ def get_score(symbol: str, db: Session = Depends(get_db)) -> dict:
         "value": float(score.value) if score.value is not None else None,
         "coverage": float(score.coverage),
         "as_of": score.as_of,
+        # Which weighting profile scored this company (Build_plan.md §M).
+        # Surfaced because profiles apply different components, so without
+        # it a reader can't tell why two companies show different rows.
+        "profile": {
+            "industry_code": score.profile.industry_code,
+            "version": score.profile.version,
+        },
         "components": [
             {
                 "component": c.component,
@@ -294,6 +301,7 @@ def get_score(symbol: str, db: Session = Depends(get_db)) -> dict:
             "revenue_growth": inputs.revenue_growth,
             "earnings_growth": inputs.earnings_growth,
             "price_to_book": inputs.price_to_book,
+            "trailing_pe": inputs.trailing_pe,
             "relative_volume": inputs.relative_volume,
             "delivery_pct": inputs.delivery_pct,
         },

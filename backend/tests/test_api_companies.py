@@ -402,9 +402,15 @@ def test_get_score_returns_value_and_components(seeded_asset: Asset) -> None:
         "revenue_growth",
         "earnings_growth",
         "price_to_book",
+        "trailing_pe",
         "relative_volume",
         "delivery_pct",
     }
+    # Which weighting profile produced this score — profiles apply
+    # different component sets, so the breakdown isn't interpretable
+    # without it (Build_plan.md §M).
+    assert body["data"]["profile"]["industry_code"] == "default"
+    assert body["data"]["profile"]["version"] >= 1
 
 
 def test_get_score_404_for_unknown_symbol() -> None:

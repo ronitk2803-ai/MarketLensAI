@@ -54,13 +54,16 @@ export const KPI_GLOSSARY: Record<string, string> = {
   drawdown: "How far the current price sits below its most recent peak, in percent. A running measure of \"how much would you have lost if you bought at the top and held,\" not a prediction of further downside.",
 
   // Opportunity Score components — each blends 1-2 raw inputs (shown below
-  // the bar) into a 0-100 normalized value, then the five are weighted
-  // together. "Why did this land here" should always be answerable by
-  // reading the raw numbers underneath, not by trusting the bar alone.
+  // the bar) into a 0-100 normalized value, then whichever components the
+  // company's industry profile applies are weighted together. "Why did
+  // this land here" should always be answerable by reading the raw numbers
+  // underneath, not by trusting the bar alone.
   valuation:
     "How cheap or expensive the stock looks against its own accounting net worth, using price-to-book. A lower P/B scores higher here — it says nothing about whether that cheapness is deserved (a low P/B can mean bargain, or it can mean the market doubts the assets are worth what the books say).",
   fundamental_quality:
-    "Balance-sheet and margin health: less debt relative to equity, and higher gross margins, both score higher. A read on how financially sound and efficiently the business runs, independent of what the stock currently costs.",
+    "Balance-sheet and margin health: less debt relative to equity, and higher gross margins, both score higher. A read on how financially sound and efficiently the business runs, independent of what the stock currently costs. Not applied to lenders, where borrowing is the business model rather than a risk signal and the margin figures don't mean the same thing.",
+  earnings_valuation:
+    "How cheap or expensive the stock looks against its own profits, using trailing price-to-earnings. A lower P/E scores higher. A loss-making company gets no score here rather than a flattering one — it doesn't have a cheap multiple, it has no multiple.",
   growth:
     "How fast revenue and earnings have been growing year over year. Faster growth scores higher — but growth alone doesn't say whether it's profitable growth (pair with fundamental quality) or already priced in (pair with valuation).",
   technical_setup:

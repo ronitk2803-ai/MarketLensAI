@@ -10,6 +10,7 @@ future backtesting, not every page view.
 """
 
 import datetime as dt
+import logging
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -18,13 +19,18 @@ from app.db.models import Asset, Score, ScoreComponent, ScoreProfile
 from app.engines.indicators import relative_volume as compute_relative_volume
 from app.engines.scoring.aggregate import compute_score
 from app.engines.scoring.base import ScoreInputs, ScoreResult
+from app.engines.scoring.components import COMPONENT_FUNCS
 from app.engines.scoring.registry import DEFAULT_WEIGHTS
 from app.services.adjusted_prices import get_adjusted_bars
 from app.services.fundamentals import get_or_fetch_ratios
 from app.services.technicals import compute_technicals
 
+logger = logging.getLogger(__name__)
 
-def get_active_profile(db: Session, industry_code: str = "default") -> ScoreProfile:
+DEFAULT_PROFILE_KEY = "default"
+
+
+def get_active_profile(db: Session, industry_code: str = DEFAULT_PROFILE_KEY) -> ScoreProfile:
     profile = (
         db.query(ScoreProfile)
         .filter_by(industry_code=industry_code, active=True)
@@ -32,13 +38,58 @@ def get_active_profile(db: Session, industry_code: str = "default") -> ScoreProf
         .first()
     )
     if profile is not None:
+        # An unknown weight key isn't an error anywhere downstream — the
+        # aggregator treats it as missing data *and* still counts it toward
+        # total weight, silently depressing coverage. Loud here so a
+        # profile seeded ahead of the code that defines its components is
+        # diagnosable instead of just mysteriously low-confidence.
+        unknown = set(profile.weights) - set(COMPONENT_FUNCS)
+        if unknown:
+            logger.warning(
+                "score profile %s v%s references unknown component(s): %s",
+                profile.industry_code,
+                profile.version,
+                ", ".join(sorted(unknown)),
+            )
         return profile
-    if industry_code != "default":
-        return get_active_profile(db, "default")
+    if industry_code != DEFAULT_PROFILE_KEY:
+        return get_active_profile(db, DEFAULT_PROFILE_KEY)
 
-    profile = ScoreProfile(industry_code="default", version=1, weights=DEFAULT_WEIGHTS, active=True)
+    profile = ScoreProfile(
+        industry_code=DEFAULT_PROFILE_KEY, version=1, weights=DEFAULT_WEIGHTS, active=True
+    )
     db.add(profile)
     db.flush()
+    return profile
+
+
+def resolve_profile_for_asset(
+    db: Session, asset: Asset, *, cache: dict[str, ScoreProfile] | None = None
+) -> ScoreProfile:
+    """Build_plan.md §M's "industry -> profile -> weights, fallback to
+    Default". Keys off `Industry.score_profile_key` rather than
+    `Industry.code` so several industries can share one profile (a future
+    manufacturing profile spans five NSE buckets), which a code-as-key
+    scheme couldn't express.
+
+    Both hops are nullable — an asset with no Company row, or a Company
+    with no industry, is not an error, it's just unclassified and scores
+    on the default profile.
+
+    `cache` is for the daily job, which resolves ~500 assets against a
+    handful of distinct profiles; per-request callers pass nothing and
+    take the one extra query.
+    """
+    key = DEFAULT_PROFILE_KEY
+    company = asset.company
+    if company is not None and company.industry is not None:
+        key = company.industry.score_profile_key or DEFAULT_PROFILE_KEY
+
+    if cache is not None and key in cache:
+        return cache[key]
+    profile = get_active_profile(db, key)
+    if cache is not None:
+        cache[key] = profile
     return profile
 
 
@@ -74,6 +125,7 @@ def gather_score_inputs(db: Session, asset: Asset) -> ScoreInputs:
         revenue_growth=ratio_rows.get("revenueGrowth"),
         earnings_growth=ratio_rows.get("earningsGrowth"),
         price_to_book=ratio_rows.get("priceToBook"),
+        trailing_pe=ratio_rows.get("trailingPE"),
         relative_volume=relative_volume,
         delivery_pct=delivery_pct,
     )
@@ -103,9 +155,14 @@ def _todays_score(db: Session, asset_id: int, profile_id: int) -> Score | None:
     )
 
 
-def get_or_compute_score(db: Session, asset: Asset) -> tuple[Score, list[ScoreComponent]]:
-    profile = get_active_profile(db)
+def get_or_compute_score(
+    db: Session, asset: Asset, *, profile_cache: dict[str, ScoreProfile] | None = None
+) -> tuple[Score, list[ScoreComponent]]:
+    profile = resolve_profile_for_asset(db, asset, cache=profile_cache)
 
+    # Scoped to this profile: an asset remapped to a different profile
+    # won't match today's row from the old one and recomputes, which is
+    # what makes a profile rollout take effect without a backfill.
     existing = _todays_score(db, asset.id, profile.id)
     if existing is not None:
         components = db.query(ScoreComponent).filter_by(score_id=existing.id).all()

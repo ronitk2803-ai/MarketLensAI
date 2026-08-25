@@ -254,19 +254,30 @@ export interface ScoreComponent {
 export interface ScoreInputs {
   rsi14: number | null;
   drawdown_pct: number | null;
+  /** Yahoo's own unit: a PERCENTAGE, not a ratio (23.8 == 0.24x). */
   debt_to_equity: number | null;
   gross_margins: number | null;
   revenue_growth: number | null;
   earnings_growth: number | null;
   price_to_book: number | null;
+  trailing_pe: number | null;
   relative_volume: number | null;
   delivery_pct: number | null;
+}
+
+/** Which weighting profile scored this company (Build_plan.md §M).
+ * Profiles apply different component *sets*, not just different weights,
+ * so the breakdown isn't interpretable without knowing which one ran. */
+export interface ScoreProfileRef {
+  industry_code: string;
+  version: number;
 }
 
 export interface Score {
   value: number | null;
   coverage: number;
   as_of: string;
+  profile: ScoreProfileRef;
   components: ScoreComponent[];
   inputs: ScoreInputs;
 }

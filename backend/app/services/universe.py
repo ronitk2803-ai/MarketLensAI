@@ -42,13 +42,34 @@ def industry_code(name: str) -> str:
     """Stable slug for `Industry.code`, e.g. "Oil Gas & Consumable Fuels" ->
     "oil-gas-consumable-fuels".
 
-    `code` is the join key `ScoreProfile.industry_code` keys off (§M), so it
-    has to stay stable across reseeds — deriving it from the name rather than
-    a row id means an industry keeps its identity even if the table is
-    rebuilt.
+    `code` is this app's canonical id for an NSE classification bucket, so
+    it has to stay stable across reseeds — deriving it from the name rather
+    than a row id means an industry keeps its identity even if the table is
+    rebuilt. It is NOT what `ScoreProfile.industry_code` keys off; that's
+    `Industry.score_profile_key` (see INDUSTRY_PROFILE_KEYS below), which
+    lets several buckets share one profile.
     """
     slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower())
     return slug.strip("-")
+
+
+# Industry.code -> ScoreProfile.industry_code. Deliberately sparse: an
+# industry only appears here when a scoring component is structurally
+# invalid for it (see app/engines/scoring/registry.py for the evidence and
+# for why IT/manufacturing are NOT listed). Anything unmapped resolves to
+# the default profile.
+#
+# This map lives in app code rather than in the migration that seeds the
+# profile rows because sync_company_industries is the only thing that ever
+# writes Industry rows — so this is the only place that can keep
+# score_profile_key correct across a universe reseed.
+INDUSTRY_PROFILE_KEYS: dict[str, str] = {
+    "financial-services": "financials",
+}
+
+
+def profile_key_for_industry(code: str) -> str:
+    return INDUSTRY_PROFILE_KEYS.get(code, "default")
 
 
 def sync_company_industries(
@@ -77,10 +98,19 @@ def sync_company_industries(
     for name in sorted({c.industry for c in constituents if c.industry}):
         code = industry_code(name)
         if code not in by_code:
-            industry = Industry(code=code, name=name)
+            industry = Industry(
+                code=code, name=name, score_profile_key=profile_key_for_industry(code)
+            )
             db.add(industry)
             by_code[code] = industry
             industries_created += 1
+        else:
+            # Re-applied on every sync, not just on create: otherwise a
+            # reseed of an existing taxonomy would leave score_profile_key
+            # frozen at whatever it was when the row was first written, and
+            # adding an industry to INDUSTRY_PROFILE_KEYS would silently
+            # never take effect.
+            by_code[code].score_profile_key = profile_key_for_industry(code)
     db.flush()
 
     assets = db.query(Asset).filter_by(market=market, exchange=exchange).all()

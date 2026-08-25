@@ -8,9 +8,17 @@ import type { Meta, Score, ScoreInputs } from "@/lib/api";
 const COMPONENT_LABELS: Record<string, string> = {
   valuation: "Valuation",
   fundamental_quality: "Fundamental quality",
+  earnings_valuation: "Earnings valuation",
   growth: "Growth",
   technical_setup: "Decline setup",
   participation: "Participation",
+};
+
+/** Profiles are seeded only where a component is structurally invalid for
+ * a sector, so this stays deliberately short — anything unmapped is on the
+ * default profile and needs no explanation. */
+const PROFILE_LABELS: Record<string, string> = {
+  financials: "Financials",
 };
 
 /**
@@ -34,6 +42,9 @@ function componentDetail(component: string, inputs: ScoreInputs): string | null 
       if (inputs.debt_to_equity != null) parts.push(`D/E ${inputs.debt_to_equity.toFixed(1)}%`);
       if (inputs.gross_margins != null) parts.push(`Gross margin ${pct1(inputs.gross_margins)}`);
       break;
+    case "earnings_valuation":
+      if (inputs.trailing_pe != null) parts.push(`P/E ${inputs.trailing_pe.toFixed(1)}`);
+      break;
     case "growth":
       if (inputs.revenue_growth != null) parts.push(`Revenue ${pct1(inputs.revenue_growth)}`);
       if (inputs.earnings_growth != null) parts.push(`Earnings ${pct1(inputs.earnings_growth)}`);
@@ -52,12 +63,21 @@ function componentDetail(component: string, inputs: ScoreInputs): string | null 
 
 export function ScorePanel({ score, meta }: { score: Score; meta: Meta }) {
   const hasScore = typeof score.value === "number";
+  const profileLabel = PROFILE_LABELS[score.profile.industry_code];
+
+  // Deliberately specific rather than a generic "scores are approximate"
+  // hedge: technical_setup + participation are the same functions at the
+  // same combined weight in every profile, so that half genuinely is
+  // comparable across industries and only the fundamental half isn't.
+  const footnote = profileLabel
+    ? `Scored with the ${profileLabel} profile: components that don't mean the same thing for this industry are excluded rather than reweighted. The decline-setup and participation components are identical across industries; the fundamental ones are most directly comparable within an industry. Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero.`
+    : "Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero.";
 
   return (
     <Panel
       title="Opportunity Score"
       actions={<ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />}
-      footnote="Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero."
+      footnote={footnote}
       fullscreenable
     >
       {!hasScore ? (
@@ -73,9 +93,17 @@ export function ScorePanel({ score, meta }: { score: Score; meta: Meta }) {
               </span>
               <span className="num text-sm text-muted-foreground">/100</span>
             </div>
-            <div className="text-right">
-              <div className="label-caps">Coverage</div>
-              <div className="num text-sm">{(score.coverage * 100).toFixed(0)}%</div>
+            <div className="flex items-end gap-4">
+              {profileLabel && (
+                <div className="text-right">
+                  <div className="label-caps">Profile</div>
+                  <div className="text-sm">{profileLabel}</div>
+                </div>
+              )}
+              <div className="text-right">
+                <div className="label-caps">Coverage</div>
+                <div className="num text-sm">{(score.coverage * 100).toFixed(0)}%</div>
+              </div>
             </div>
           </div>
 

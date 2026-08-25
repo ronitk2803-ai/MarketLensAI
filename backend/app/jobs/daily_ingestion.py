@@ -25,9 +25,9 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from app.db.models import Asset
+from app.db.models import Asset, Company, ScoreProfile
 from app.services.backfill import BackfillResult, backfill_universe_from_bhavcopy
 from app.services.corporate_actions import get_or_fetch_corporate_actions
 from app.services.scoring import get_or_compute_score
@@ -48,8 +48,13 @@ class DailyIngestionResult:
 
 
 def _active_equity_universe(db: Session) -> list[Asset]:
+    # Company/Industry are eager-loaded because scoring resolves a profile
+    # per asset through asset.company.industry (app/services/scoring.py's
+    # resolve_profile_for_asset). Both relationships are lazy-select by
+    # default, so without this a 500-asset run fires ~1000 extra queries.
     return (
         db.query(Asset)
+        .options(joinedload(Asset.company).joinedload(Company.industry))
         .filter_by(market="IN", exchange="NSE", active=True, asset_class="EQUITY")
         .all()
     )
@@ -77,9 +82,12 @@ def run_daily_ingestion(db: Session, *, price_lookback_days: int = 10) -> DailyI
 
     scores_computed = 0
     scores_errors = 0
+    # Resolved once per distinct profile rather than once per asset — there
+    # are a couple of profiles across hundreds of assets.
+    profile_cache: dict[str, ScoreProfile] = {}
     for asset in assets:
         try:
-            get_or_compute_score(db, asset)
+            get_or_compute_score(db, asset, profile_cache=profile_cache)
             scores_computed += 1
         except Exception:
             scores_errors += 1

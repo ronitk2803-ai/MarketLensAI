@@ -272,9 +272,15 @@ class CompanyAiSummary(Base):
 
 class ScoreProfile(Base):
     """Weight configuration for the scoring engine (Build_plan.md §L/§M):
-    "weights are versioned configuration, never code constants." Only a
-    "default" profile is seeded — industry-specific profiles are P2 (see
-    app/engines/scoring/registry.py for why real ones aren't faked yet).
+    "weights are versioned configuration, never code constants."
+
+    `industry_code` is matched against `Industry.score_profile_key` (not
+    `Industry.code`) so several industries can share one profile. Profiles
+    differ by which components apply, not just how they're weighted — see
+    app/engines/scoring/registry.py for the evidence bar a profile has to
+    clear before being seeded, and why only "default" and "financials"
+    currently clear it.
+
     `active` lets a new version supersede an old one without deleting the
     historical record a past Score row was computed against."""
 
@@ -309,6 +315,11 @@ class Score(Base):
     coverage: Mapped[Decimal] = mapped_column(Numeric(4, 3))
     confidence: Mapped[str]  # "high" | "low"
     as_of: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Which weights produced this row. Kept resolvable (rather than just an
+    # id) because profiles apply different component sets, so a score is
+    # only interpretable alongside the profile that computed it.
+    profile: Mapped["ScoreProfile"] = relationship()
 
 
 class ScoreComponent(Base):

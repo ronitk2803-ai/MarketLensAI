@@ -4,13 +4,17 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, Score, ScoreProfile
+from app.db.models import Asset, Company, Industry, Score, ScoreProfile
 from app.domain.models import AssetRef, Bar, Ratios
-from app.engines.scoring.registry import DEFAULT_WEIGHTS
+from app.engines.scoring.registry import DEFAULT_WEIGHTS, FINANCIALS_WEIGHTS
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
-from app.services.scoring import get_active_profile, get_or_compute_score
+from app.services.scoring import (
+    get_active_profile,
+    get_or_compute_score,
+    resolve_profile_for_asset,
+)
 
 
 def _make_asset(db: Session, symbol: str = "ZZSCORE1") -> Asset:
@@ -18,6 +22,30 @@ def _make_asset(db: Session, symbol: str = "ZZSCORE1") -> Asset:
     db.add(asset)
     db.flush()
     return asset
+
+
+def _classify(db: Session, asset: Asset, code: str, profile_key: str) -> Industry:
+    """Give an asset the Company -> Industry linkage profile resolution
+    walks. Both hops are separate rows, so tests can also omit either one."""
+    industry = db.query(Industry).filter_by(code=code).one_or_none()
+    if industry is None:
+        industry = Industry(code=code, name=code.title(), score_profile_key=profile_key)
+        db.add(industry)
+        db.flush()
+    db.add(Company(asset_id=asset.id, industry_id=industry.id))
+    db.flush()
+    return industry
+
+
+def _financials_profile(db: Session) -> ScoreProfile:
+    profile = db.query(ScoreProfile).filter_by(industry_code="financials").one_or_none()
+    if profile is None:
+        profile = ScoreProfile(
+            industry_code="financials", version=1, weights=FINANCIALS_WEIGHTS, active=True
+        )
+        db.add(profile)
+        db.flush()
+    return profile
 
 
 def _linear_bars(n: int) -> list[Bar]:
@@ -50,11 +78,13 @@ def _stub_providers(monkeypatch: pytest.MonkeyPatch) -> None:
             asset=asset,
             as_of=dt.date.today(),
             values={
-                "debtToEquity": 0.8,
+                # debtToEquity in Yahoo's own percentage unit (80.0 == 0.8x).
+                "debtToEquity": 80.0,
                 "grossMargins": 0.30,
                 "revenueGrowth": 0.10,
                 "earningsGrowth": 0.05,
                 "priceToBook": 2.5,
+                "trailingPE": 22.0,
             },
         ),
     )
@@ -75,6 +105,83 @@ def test_get_active_profile_reuses_existing_row(db: Session) -> None:
 def test_get_active_profile_falls_back_to_default_for_unmapped_industry(db: Session) -> None:
     profile = get_active_profile(db, "banking")
     assert profile.industry_code == "default"
+
+
+def test_resolve_profile_falls_back_to_default_for_an_unclassified_asset(db: Session) -> None:
+    """Both hops to an industry are nullable. An asset with no Company row
+    isn't an error, it's just unclassified."""
+    asset = _make_asset(db, "ZZPROF1")
+    assert asset.company is None
+    assert resolve_profile_for_asset(db, asset).industry_code == "default"
+
+
+def test_resolve_profile_falls_back_when_company_has_no_industry(db: Session) -> None:
+    asset = _make_asset(db, "ZZPROF2")
+    db.add(Company(asset_id=asset.id, industry_id=None))
+    db.flush()
+    db.refresh(asset)
+    assert resolve_profile_for_asset(db, asset).industry_code == "default"
+
+
+def test_resolve_profile_falls_back_for_an_industry_with_no_seeded_profile(db: Session) -> None:
+    asset = _make_asset(db, "ZZPROF3")
+    _classify(db, asset, "zz-unmapped-industry", profile_key="not-a-seeded-profile")
+    db.refresh(asset)
+    assert resolve_profile_for_asset(db, asset).industry_code == "default"
+
+
+def test_resolve_profile_uses_the_industry_s_score_profile_key(db: Session) -> None:
+    """Keyed off Industry.score_profile_key rather than Industry.code, so
+    several industries can share one profile."""
+    _financials_profile(db)
+    asset = _make_asset(db, "ZZPROF4")
+    _classify(db, asset, "zz-financial-services", profile_key="financials")
+    db.refresh(asset)
+
+    assert resolve_profile_for_asset(db, asset).industry_code == "financials"
+
+
+def test_resolve_profile_cache_avoids_requerying(db: Session) -> None:
+    _financials_profile(db)
+    asset = _make_asset(db, "ZZPROF5")
+    _classify(db, asset, "zz-fin-cached", profile_key="financials")
+    db.refresh(asset)
+
+    cache: dict[str, ScoreProfile] = {}
+    first = resolve_profile_for_asset(db, asset, cache=cache)
+    assert set(cache) == {"financials"}
+    second = resolve_profile_for_asset(db, asset, cache=cache)
+    assert first.id == second.id
+
+
+def test_financials_asset_is_scored_without_fundamental_quality(db: Session) -> None:
+    """The whole point of the profile: for a lender, every leg of
+    fundamental_quality means something different than it does elsewhere,
+    so the component is excluded rather than reweighted."""
+    _financials_profile(db)
+    asset = _make_asset(db, "ZZPROF6")
+    _classify(db, asset, "zz-fin-scored", profile_key="financials")
+    db.refresh(asset)
+
+    score, components = get_or_compute_score(db, asset)
+
+    assert score.profile.industry_code == "financials"
+    names = {c.component for c in components}
+    assert "fundamental_quality" not in names
+    assert "earnings_valuation" in names
+
+
+def test_two_industries_can_share_one_profile(db: Session) -> None:
+    financials = _financials_profile(db)
+    bank = _make_asset(db, "ZZPROF7")
+    nbfc = _make_asset(db, "ZZPROF8")
+    _classify(db, bank, "zz-banks", profile_key="financials")
+    _classify(db, nbfc, "zz-nbfcs", profile_key="financials")
+    db.refresh(bank)
+    db.refresh(nbfc)
+
+    assert resolve_profile_for_asset(db, bank).id == financials.id
+    assert resolve_profile_for_asset(db, nbfc).id == financials.id
 
 
 def test_get_or_compute_score_computes_and_persists(db: Session) -> None:
