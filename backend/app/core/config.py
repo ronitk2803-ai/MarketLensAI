@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     # Shared secret gating /admin/* endpoints until a real auth system exists (P1).
     admin_token: str | None = None
 
+    # Signs/verifies JWTs (app/core/security.py, app/services/auth.py). No
+    # default — unlike admin_token (which just leaves admin routes
+    # unreachable if unset), a missing or weak secret here would let
+    # anyone forge a session, so this must fail loudly at startup instead
+    # of silently running insecure.
+    jwt_secret: str
+    # 60 rather than the textbook-minimal 15: there's no silent
+    # background refresh yet (a Next.js middleware-based one was
+    # considered and rejected — see the P1 auth plan — since Next 16
+    # explicitly warns proxy/middleware isn't meant for that), so a
+    # shorter TTL would mean re-logging in mid-session. Revisit once
+    # reactive refresh-on-401 exists.
+    access_token_ttl_minutes: int = 60
+    refresh_token_ttl_days: int = 30
+
     # Runs app.jobs.daily_ingestion once a day in-process via APScheduler
     # (Build_plan.md §Q MVP default). Off by default so importing app.main
     # for tests, or running a second dev instance, doesn't fire an

@@ -324,3 +324,49 @@ class ScoreComponent(Base):
     normalized_value: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     weight: Mapped[Decimal] = mapped_column(Numeric(5, 4))
     contribution: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+
+
+class AppUser(Base):
+    """User layer (Build_plan.md §C/§O, P1): the account everything else in
+    that layer — portfolio, a real watchlist, thesis tracker — gets gated
+    behind once it's introduced. Not named `user`: that's a reserved word
+    in Postgres, and SQLAlchemy would only silently quote around it.
+
+    `hashed_password` is an Argon2 hash (app/services/auth.py), never the
+    raw password — same "never store the sensitive thing directly" rule
+    RefreshToken.token_hash below follows for tokens."""
+
+    __tablename__ = "app_user"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(unique=True, index=True)
+    hashed_password: Mapped[str]
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class RefreshToken(Base):
+    """One row per issued refresh token, so a token can actually be revoked
+    (logout) rather than just expiring on its own — a stateless JWT alone
+    can't do that. `token_hash` is a SHA-256 hash of the raw token, not the
+    token itself: a DB leak alone must not hand out usable credentials, the
+    same reasoning as password hashing.
+
+    Rotated on every use (app/services/auth.py's rotate_refresh_token):
+    each refresh revokes this row and issues a fresh one, so a leaked
+    refresh token has a shrinking window before its next legitimate use
+    invalidates it."""
+
+    __tablename__ = "refresh_token"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(unique=True)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped["AppUser"] = relationship()

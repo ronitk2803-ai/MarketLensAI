@@ -4,6 +4,12 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    /** The backend's own {"detail": "..."} message, when the error body
+     * parsed as JSON with one — only populated by apiFetchRaw callers
+     * (auth), since that's the first place a user-facing distinction
+     * between error reasons (wrong password vs. duplicate email) matters
+     * enough to plumb through. */
+    public detail?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -27,6 +33,26 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<Envelope<T
     throw new ApiError(`Request to ${path} failed`, res.status);
   }
   return res.json() as Promise<Envelope<T>>;
+}
+
+/** For endpoints that return a bare JSON body rather than the {data, meta}
+ * envelope — auth (app/api/v1/auth.py) is the only current example, since
+ * meta.source/meta.confidence are specifically about market-data
+ * provenance and don't apply to an account action. */
+async function apiFetchRaw<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, init);
+  if (!res.ok) {
+    const detail = await res
+      .json()
+      .then((body: unknown) =>
+        typeof body === "object" && body !== null && "detail" in body
+          ? String((body as { detail: unknown }).detail)
+          : undefined,
+      )
+      .catch(() => undefined);
+    throw new ApiError(`Request to ${path} failed`, res.status, detail);
+  }
+  return res.json() as Promise<T>;
 }
 
 export interface HealthStatus {
@@ -339,4 +365,69 @@ export function generateAiSummary(symbol: string) {
 export function getLiveQuotes(symbols: string[]) {
   const params = new URLSearchParams({ symbols: symbols.join(",") });
   return apiFetch<LiveQuote[]>(`/quotes?${params.toString()}`, { cache: "no-store" });
+}
+
+export interface AuthTokens {
+  access_token: string;
+  refresh_token: string;
+}
+
+export interface AuthUser {
+  id: number;
+  email: string;
+}
+
+export function registerUser(email: string, password: string) {
+  return apiFetchRaw<AuthTokens>("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+    cache: "no-store",
+  });
+}
+
+export function loginUser(email: string, password: string) {
+  return apiFetchRaw<AuthTokens>("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+    cache: "no-store",
+  });
+}
+
+export function refreshTokens(refreshToken: string) {
+  return apiFetchRaw<AuthTokens>("/auth/refresh", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    cache: "no-store",
+  });
+}
+
+export function logoutUser(refreshToken: string) {
+  return apiFetchRaw<{ status: string }>("/auth/logout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    cache: "no-store",
+  });
+}
+
+/** Server Components call this directly (not through a Route Handler) —
+ * same as getCompany/getPrices/etc., per this app's existing convention
+ * that Route Handlers only exist to bridge Client Components that can't
+ * reach API_BASE_URL server-side. Reads the user from the backend's own
+ * signature-verified token check rather than decoding the JWT locally, so
+ * the frontend never needs to know the signing secret and login-state
+ * display always reflects what the backend would actually accept. */
+export async function getCurrentUser(accessToken: string): Promise<AuthUser | null> {
+  try {
+    return await apiFetchRaw<AuthUser>("/auth/me", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return null;
+    throw error;
+  }
 }

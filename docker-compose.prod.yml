@@ -69,6 +69,11 @@ services:
       UPSTOX_API_SECRET: ${UPSTOX_API_SECRET:-}
       UPSTOX_REDIRECT_URI: ${UPSTOX_REDIRECT_URI:-}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Required — the backend won't start without it (app/core/config.py).
+      # The fallback here is dev-only convenience matching POSTGRES_PASSWORD's
+      # pattern above; set a real one in the root .env for anything that
+      # isn't purely local (see .env's own comment).
+      JWT_SECRET: ${JWT_SECRET:-dev-insecure-secret-change-me}
       # Gemini free tier — the click-triggered AI company summary. Was set
       # in backend/.env for the bare-metal local dev server but never wired
       # into this compose file, so the containerized deploy always 502'd
