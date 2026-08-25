@@ -570,24 +570,36 @@ export function deleteThesis(accessToken: string, id: number) {
   });
 }
 
-// Portfolio (Build_plan.md P1, Zerodha CSV import) — bare JSON like Thesis
-// above: a holding is user-authored quantity/avg_cost plus a computed P&L,
-// not market data with source/confidence to report.
+// Portfolio (Build_plan.md P1, multi-broker CSV/Excel import) — bare JSON
+// like Thesis above: a holding is user-authored quantity/avg_cost plus a
+// computed P&L, not market data with source/confidence to report.
+
+export type PortfolioBroker = "manual" | "zerodha" | "upstox";
+
+/** One underlying lot behind a consolidated PortfolioHolding — a user can
+ * hold the same asset across multiple demat accounts plus a manual entry;
+ * each is a separate row the backend sums into the consolidated totals
+ * below, so this is what edit/delete actually target. */
+export interface PortfolioLot {
+  holding_id: number;
+  broker: PortfolioBroker;
+  quantity: number;
+  avg_cost: number;
+}
 
 export interface PortfolioHolding {
-  id: number;
   symbol: string;
   exchange: string;
   asset_name: string;
   quantity: number;
   avg_cost: number;
-  source: "manual" | "csv";
   last_price: number | null;
   as_of: string | null;
   market_value: number | null;
   cost_basis: number;
   unrealized_pnl: number | null;
   unrealized_pnl_pct: number | null;
+  lots: PortfolioLot[];
 }
 
 export interface PortfolioTotals {

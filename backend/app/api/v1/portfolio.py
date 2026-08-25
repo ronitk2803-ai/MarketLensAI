@@ -5,7 +5,9 @@ user-authored, not market data with source/confidence to report, even
 though a computed market_value/P&L rides alongside.
 """
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from typing import Literal
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,8 +18,8 @@ from app.services.portfolio import (
     HoldingValuation,
     add_or_update_holding,
     delete_holding,
-    get_valuation,
-    import_holdings_csv,
+    get_valuation_for_asset,
+    import_holdings_file,
     list_holdings,
     update_holding,
 )
@@ -43,19 +45,26 @@ class UpdateHoldingRequest(BaseModel):
 
 def _valuation_to_dict(v: HoldingValuation) -> dict:
     return {
-        "id": v.holding_id,
         "symbol": v.symbol,
         "exchange": v.exchange,
         "asset_name": v.name,
         "quantity": v.quantity,
         "avg_cost": v.avg_cost,
-        "source": v.source,
         "last_price": v.last_price,
         "as_of": v.as_of,
         "market_value": v.market_value,
         "cost_basis": v.cost_basis,
         "unrealized_pnl": v.unrealized_pnl,
         "unrealized_pnl_pct": v.unrealized_pnl_pct,
+        "lots": [
+            {
+                "holding_id": lot.holding_id,
+                "broker": lot.broker,
+                "quantity": lot.quantity,
+                "avg_cost": lot.avg_cost,
+            }
+            for lot in v.lots
+        ],
     }
 
 
@@ -107,7 +116,7 @@ def add_holding(
     )
     if holding is None:
         raise HTTPException(status_code=404, detail=f"unknown asset: {payload.symbol}")
-    return _valuation_to_dict(get_valuation(db, holding))
+    return _valuation_to_dict(get_valuation_for_asset(db, current_user.id, holding.asset_id))
 
 
 @router.put("/{holding_id}")
@@ -126,7 +135,7 @@ def edit_holding(
     )
     if holding is None:
         raise HTTPException(status_code=404, detail="holding not found")
-    return _valuation_to_dict(get_valuation(db, holding))
+    return _valuation_to_dict(get_valuation_for_asset(db, current_user.id, holding.asset_id))
 
 
 @router.delete("/{holding_id}")
@@ -142,13 +151,15 @@ def remove_holding(
 
 
 @router.post("/import")
-def import_csv(
+def import_file(
     file: UploadFile = File(...),
+    broker: Literal["zerodha", "upstox"] = Form(...),
     current_user: AppUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    if file.filename and not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="please upload a .csv file")
+    filename = file.filename or ""
+    if not (filename.lower().endswith(".csv") or filename.lower().endswith(".xlsx")):
+        raise HTTPException(status_code=400, detail="please upload a .csv or .xlsx file")
 
     raw_bytes = file.file.read(MAX_UPLOAD_BYTES + 1)
     if not raw_bytes:
@@ -158,13 +169,9 @@ def import_csv(
             status_code=400,
             detail=f"file too large — max {MAX_UPLOAD_BYTES // (1024 * 1024)}MB",
         )
-    try:
-        raw_text = raw_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="couldn't read the file as UTF-8 text") from exc
 
     try:
-        summary = import_holdings_csv(db, current_user.id, raw_text)
+        summary = import_holdings_file(db, current_user.id, raw_bytes, filename, broker=broker)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

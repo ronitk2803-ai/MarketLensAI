@@ -1,5 +1,13 @@
-"""Portfolio holdings CRUD, ownership-scoped to the caller, plus Zerodha
-holdings-CSV import (Build_plan.md P1 build-sequence step 17).
+"""Portfolio holdings CRUD, ownership-scoped to the caller, plus
+multi-broker (Zerodha, Upstox) holdings-file import (Build_plan.md P1
+build-sequence step 17).
+
+A user can hold the same asset across multiple demat accounts plus a
+hand-entered position — each is stored as its own `Holding` row ("lot"),
+tagged with `broker`. Every read consolidates all of a user's lots for
+an asset into one `HoldingValuation` (summed quantity, weighted-average
+cost basis), with the underlying `lots` still exposed so the UI can show
+and edit each broker's position individually.
 
 P&L is computed live on every read from whatever daily_ingestion has
 already landed in PriceOHLCV — same "stored-data-only, recompute on every
@@ -11,45 +19,56 @@ price call is made here.
 import datetime as dt
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset, Holding, PriceOHLCV
 from app.engines.adjustment import adjust_bars
-from app.engines.csv_import import ParsedHoldingRow, parse_holdings_csv
+from app.engines.csv_import import ParsedHoldingRow, parse_holdings_file
 from app.services.corporate_actions import get_stored_corporate_actions
 from app.services.prices import row_to_bar
 from app.services.thesis import find_asset_by_symbol
 
+Broker = Literal["zerodha", "upstox"]
+
 __all__ = [
+    "BrokerLot",
     "HoldingValuation",
     "ImportRowResult",
     "ImportSummary",
     "add_or_update_holding",
     "delete_holding",
     "get_holding",
-    "get_valuation",
-    "import_holdings_csv",
+    "get_valuation_for_asset",
+    "import_holdings_file",
     "list_holdings",
     "update_holding",
 ]
 
 
 @dataclass(frozen=True, slots=True)
-class HoldingValuation:
+class BrokerLot:
     holding_id: int
+    broker: str
+    quantity: float
+    avg_cost: float
+
+
+@dataclass(frozen=True, slots=True)
+class HoldingValuation:
     symbol: str
     exchange: str
     name: str
     quantity: float
     avg_cost: float
-    source: str
     last_price: float | None
     as_of: dt.date | None
     market_value: float | None
     cost_basis: float
     unrealized_pnl: float | None
     unrealized_pnl_pct: float | None
+    lots: list[BrokerLot]
 
 
 def _load_latest_close(db: Session, asset: Asset) -> tuple[float | None, dt.date | None]:
@@ -65,10 +84,22 @@ def _load_latest_close(db: Session, asset: Asset) -> tuple[float | None, dt.date
     return bars[-1].close, bars[-1].date
 
 
-def _to_valuation(db: Session, holding: Holding) -> HoldingValuation:
-    last_price, as_of = _load_latest_close(db, holding.asset)
-    quantity, avg_cost = float(holding.quantity), float(holding.avg_cost)
-    cost_basis = quantity * avg_cost
+def _consolidate(db: Session, asset: Asset, holdings: list[Holding]) -> HoldingValuation:
+    """Sums every lot for one asset into a single valuation. `quantity`
+    for every lot is guaranteed > 0 (enforced at the Pydantic layer for
+    manual add/edit, and in the CSV/XLSX parser for imports), so
+    total_quantity here can never be zero — the weighted-average division
+    is always safe."""
+    last_price, as_of = _load_latest_close(db, asset)
+    lots = [
+        BrokerLot(
+            holding_id=h.id, broker=h.broker, quantity=float(h.quantity), avg_cost=float(h.avg_cost)
+        )
+        for h in holdings
+    ]
+    quantity = sum(lot.quantity for lot in lots)
+    cost_basis = sum(lot.quantity * lot.avg_cost for lot in lots)
+    avg_cost = cost_basis / quantity
     market_value = quantity * last_price if last_price is not None else None
     unrealized_pnl = market_value - cost_basis if market_value is not None else None
     unrealized_pnl_pct = (
@@ -77,19 +108,18 @@ def _to_valuation(db: Session, holding: Holding) -> HoldingValuation:
         else None
     )
     return HoldingValuation(
-        holding_id=holding.id,
-        symbol=holding.asset.symbol,
-        exchange=holding.asset.exchange,
-        name=holding.asset.name,
+        symbol=asset.symbol,
+        exchange=asset.exchange,
+        name=asset.name,
         quantity=quantity,
         avg_cost=avg_cost,
-        source=holding.source,
         last_price=last_price,
         as_of=as_of,
         market_value=market_value,
         cost_basis=cost_basis,
         unrealized_pnl=unrealized_pnl,
         unrealized_pnl_pct=unrealized_pnl_pct,
+        lots=lots,
     )
 
 
@@ -97,14 +127,19 @@ def list_holdings(db: Session, user_id: int) -> list[HoldingValuation]:
     holdings = (
         db.query(Holding).filter_by(user_id=user_id).order_by(Holding.created_at).all()
     )
-    return [_to_valuation(db, h) for h in holdings]
+    by_asset: dict[int, list[Holding]] = {}
+    for h in holdings:
+        by_asset.setdefault(h.asset_id, []).append(h)
+    return [_consolidate(db, group[0].asset, group) for group in by_asset.values()]
 
 
-def get_valuation(db: Session, holding: Holding) -> HoldingValuation:
-    """Public wrapper so the API layer can price a single Holding it
-    already has in hand (e.g. right after an add/update) without a second
-    list_holdings query."""
-    return _to_valuation(db, holding)
+def get_valuation_for_asset(db: Session, user_id: int, asset_id: int) -> HoldingValuation:
+    """Same consolidation as list_holdings, scoped to one asset — used by
+    the add/edit endpoints so their response is shaped identically to
+    what GET /portfolio would show for that asset, never a lone-lot view
+    that could disagree with it."""
+    holdings = db.query(Holding).filter_by(user_id=user_id, asset_id=asset_id).all()
+    return _consolidate(db, holdings[0].asset, holdings)
 
 
 def get_holding(db: Session, user_id: int, holding_id: int) -> Holding | None:
@@ -120,18 +155,26 @@ def add_or_update_holding(
     """None if `symbol` doesn't resolve (API -> 404), mirroring
     add_to_watchlist's contract. Unlike watchlist's add, re-submitting an
     already-held symbol updates quantity/avg_cost in place rather than
-    being a no-op — that's the whole point of "I bought 10 more."""
+    being a no-op — that's the whole point of "I bought 10 more."
+
+    Scoped to broker="manual" specifically — a user can also hold this
+    asset via one or more broker imports, which are separate lots
+    (separate rows) this function must never touch."""
     asset = find_asset_by_symbol(db, symbol)
     if asset is None:
         return None
-    holding = db.query(Holding).filter_by(user_id=user_id, asset_id=asset.id).one_or_none()
+    holding = (
+        db.query(Holding)
+        .filter_by(user_id=user_id, asset_id=asset.id, broker="manual")
+        .one_or_none()
+    )
     if holding is None:
         holding = Holding(
             user_id=user_id,
             asset_id=asset.id,
+            broker="manual",
             quantity=Decimal(str(quantity)),
             avg_cost=Decimal(str(avg_cost)),
-            source="manual",
         )
         db.add(holding)
     else:
@@ -185,36 +228,37 @@ class ImportSummary:
     rows: list[ImportRowResult] = field(default_factory=list)
 
 
-def import_holdings_csv(db: Session, user_id: int, raw_csv: str) -> ImportSummary:
+def import_holdings_file(
+    db: Session, user_id: int, raw_bytes: bytes, filename: str, *, broker: Broker
+) -> ImportSummary:
     """Parses + resolves symbols + replaces this user's previously
-    CSV-imported holdings, all in the caller's transaction (no commit
-    here — app/db/session.py's get_db commits once at the end of the
-    request, or rolls back the whole thing on any exception, so the
-    delete+insert is atomic without this function doing anything special).
+    imported lots for this one broker, all in the caller's transaction
+    (no commit here — app/db/session.py's get_db commits once at the end
+    of the request, or rolls back the whole thing on any exception, so
+    the delete+insert is atomic without this function doing anything
+    special).
 
-    A holdings CSV is a snapshot ("this is what I hold right now"), not a
-    delta — a successful import deletes every existing source="csv"
-    Holding row for this user first (a symbol that dropped out of a
-    re-imported file means that position was closed), then re-inserts
-    from the new file. Manually-added holdings (source="manual") for
-    assets NOT present in the new file are left untouched — see
-    Holding's docstring. A manual holding for an asset that IS in the new
-    file is taken over (flipped to source="csv", values updated) since
-    the unique(user_id, asset_id) constraint means there can only be one
-    row per asset regardless of origin, and the broker export is the more
-    authoritative source for what's actually held; this is reported back
-    per-row rather than happening silently.
+    A holdings file is a snapshot ("this is what I hold right now at
+    this broker"), not a delta — a successful import deletes every
+    existing Holding row for this (user, broker) first (a symbol that
+    dropped out of a re-imported file means that position was closed at
+    this broker), then re-inserts from the new file. Lots from any OTHER
+    broker, and manual lots, are never touched — they live under a
+    different `broker` value, so they're outside this delete's scope
+    entirely; there's no more "takeover" case to handle (the old
+    single-row-per-asset schema needed one, per-broker uniqueness
+    doesn't).
 
     Only replaces if at least one row resolved: an all-garbage file
-    (wrong file, every symbol unrecognized) must not wipe existing
-    csv-imported holdings down to zero — it returns a summary with 0
-    imported and each row's specific skip reason instead, leaving
-    existing holdings untouched.
+    (wrong file, every symbol unrecognized) must not wipe this broker's
+    existing holdings down to zero — it returns a summary with 0 imported
+    and each row's specific skip reason instead, leaving existing lots
+    untouched.
 
-    Raises ValueError (from parse_holdings_csv) for structural failures —
-    the API layer maps that to a 400.
+    Raises ValueError (from parse_holdings_file) for structural failures
+    — the API layer maps that to a 400.
     """
-    parsed = parse_holdings_csv(raw_csv)
+    parsed = parse_holdings_file(raw_bytes, filename)
 
     resolved: list[tuple[Asset, ParsedHoldingRow]] = []
     results: list[ImportRowResult] = []
@@ -245,35 +289,19 @@ def import_holdings_csv(db: Session, user_id: int, raw_csv: str) -> ImportSummar
         results.append(ImportRowResult(err.row_number, "", "skipped", err.reason))
 
     if resolved:
-        db.query(Holding).filter_by(user_id=user_id, source="csv").delete()
+        db.query(Holding).filter_by(user_id=user_id, broker=broker).delete()
         db.flush()
         for asset, row in resolved:
-            existing = (
-                db.query(Holding).filter_by(user_id=user_id, asset_id=asset.id).one_or_none()
+            db.add(
+                Holding(
+                    user_id=user_id,
+                    asset_id=asset.id,
+                    broker=broker,
+                    quantity=Decimal(str(row.quantity)),
+                    avg_cost=Decimal(str(row.avg_cost)),
+                )
             )
-            if existing is not None:
-                existing.quantity = Decimal(str(row.quantity))
-                existing.avg_cost = Decimal(str(row.avg_cost))
-                existing.source = "csv"
-                results.append(
-                    ImportRowResult(
-                        row.row_number,
-                        row.symbol,
-                        "imported",
-                        "replaced your manual entry for this symbol",
-                    )
-                )
-            else:
-                db.add(
-                    Holding(
-                        user_id=user_id,
-                        asset_id=asset.id,
-                        quantity=Decimal(str(row.quantity)),
-                        avg_cost=Decimal(str(row.avg_cost)),
-                        source="csv",
-                    )
-                )
-                results.append(ImportRowResult(row.row_number, row.symbol, "imported"))
+            results.append(ImportRowResult(row.row_number, row.symbol, "imported"))
         db.flush()
 
     results.sort(key=lambda r: r.row_number)

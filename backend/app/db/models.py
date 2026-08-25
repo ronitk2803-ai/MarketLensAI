@@ -504,16 +504,20 @@ class ThesisEvent(Base):
 
 
 class Holding(Base):
-    """A user's current position in one asset — deliberately a single flat
-    (user, asset) table, not the `portfolio` + `holding` pair Build_plan.md
-    §C sketches, for the same reason WatchlistItem already collapsed that
-    same shape: nothing asks for multiple named portfolios per user.
+    """One "lot" of a user's position in one asset, tagged with which
+    broker it came from — deliberately not a single flat (user, asset)
+    row, and not the `portfolio` + `holding` pair Build_plan.md §C
+    sketches either. A user can hold the same stock across multiple demat
+    accounts (e.g. Zerodha AND Upstox) plus a hand-entered position no
+    broker export knows about; app/services/portfolio.py's list_holdings
+    sums every lot for an asset into one consolidated view (weighted-
+    average cost basis), so this table stores the underlying lots, not
+    the consolidated total.
 
-    Only `quantity`/`avg_cost` are stored — current price, market value,
-    and P&L are computed live on every read (app/services/portfolio.py),
-    the same "recompute from stored EOD data on every request, never cache
-    a number that can go stale" discipline watchlist.py already applies to
-    quotes.
+    Only `quantity`/`avg_cost` are stored per lot — current price, market
+    value, and P&L are computed live on every read, the same "recompute
+    from stored EOD data on every request, never cache a number that can
+    go stale" discipline watchlist.py already applies to quotes.
 
     `quantity` is Numeric rather than an integer count: NSE equity
     positions are whole shares in practice, but this app's instrument
@@ -521,31 +525,30 @@ class Holding(Base):
     corporate-action-driven fractional entitlements are real, so an
     integer would be a constraint with no corresponding benefit.
 
-    `source` exists so a CSV import can't silently destroy a hand-entered
-    holding (e.g. a position at a different broker Zerodha's export knows
-    nothing about) — import only replaces rows it previously created
-    itself (app/services/portfolio.py's import_holdings_csv). A manual
-    holding for an asset that's also in a freshly imported file gets taken
-    over (flipped to "csv"): the unique(user_id, asset_id) constraint
-    means there can only ever be one row per asset regardless of origin,
-    and the broker export is the more authoritative source for what's
-    actually held.
+    `broker` ("manual" | "zerodha" | "upstox") is why a CSV import can't
+    silently destroy a hand-entered holding, or a different broker's
+    holding, for the same asset: import only ever replaces the lots it
+    previously created for that exact broker
+    (app/services/portfolio.py's import_holdings_file), never another
+    broker's or a manual lot.
 
-    `unique(user_id, asset_id)`: a user holds at most one position per
-    asset. Unlike WatchlistItem, adding an already-held symbol again is
-    NOT a no-op — it's how a position change (or a re-import) is
-    recorded, so this constraint backstops upsert-in-place, not
-    idempotent no-op-add."""
+    `unique(user_id, asset_id, broker)`: a user holds at most one lot per
+    asset *per broker*. Unlike WatchlistItem, adding an already-held
+    (asset, broker) pair again is NOT a no-op — it's how a position
+    change (or a re-import) is recorded, so this constraint backstops
+    upsert-in-place within one broker, not idempotent no-op-add."""
 
     __tablename__ = "holding"
-    __table_args__ = (UniqueConstraint("user_id", "asset_id", name="uq_holding_user_asset"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "asset_id", "broker", name="uq_holding_user_asset_broker"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id"), index=True)
     asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), index=True)
+    broker: Mapped[str]  # "manual" | "zerodha" | "upstox"
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
     avg_cost: Mapped[Decimal] = mapped_column(Numeric(18, 4))
-    source: Mapped[str] = mapped_column(default="manual")  # "manual" | "csv"
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

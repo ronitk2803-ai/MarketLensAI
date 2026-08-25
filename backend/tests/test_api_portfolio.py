@@ -40,6 +40,13 @@ def _add_payload(symbol: str) -> dict:
     return {"symbol": symbol, "quantity": 10, "avg_cost": 100}
 
 
+def _import(headers: dict[str, str], csv_text: str, broker: str, filename: str = "holdings.csv"):
+    files = {"file": (filename, csv_text, "text/csv")}
+    return client.post(
+        "/api/v1/portfolio/import", files=files, data={"broker": broker}, headers=headers
+    )
+
+
 def test_get_requires_authentication() -> None:
     assert client.get("/api/v1/portfolio").status_code == 401
 
@@ -58,8 +65,9 @@ def test_add_and_list_round_trip(db: Session) -> None:
     assert added.status_code == 200
     body = added.json()
     assert body["symbol"] == "ZZAPIPF2"
-    assert body["source"] == "manual"
     assert body["cost_basis"] == 1000.0
+    assert len(body["lots"]) == 1
+    assert body["lots"][0]["broker"] == "manual"
 
     listed = client.get("/api/v1/portfolio", headers=headers)
     assert listed.status_code == 200
@@ -93,11 +101,12 @@ def test_update_and_delete_are_ownership_scoped(db: Session) -> None:
     created = client.post(
         "/api/v1/portfolio", json=_add_payload("ZZAPIPF4"), headers=alice_headers
     ).json()
+    holding_id = created["lots"][0]["holding_id"]
 
     update_response = client.put(
-        f"/api/v1/portfolio/{created['id']}", json={"quantity": 5}, headers=bob_headers
+        f"/api/v1/portfolio/{holding_id}", json={"quantity": 5}, headers=bob_headers
     )
-    delete_response = client.delete(f"/api/v1/portfolio/{created['id']}", headers=bob_headers)
+    delete_response = client.delete(f"/api/v1/portfolio/{holding_id}", headers=bob_headers)
 
     assert update_response.status_code == 404
     assert delete_response.status_code == 404
@@ -109,39 +118,55 @@ def test_delete_removes_the_holding(db: Session) -> None:
     created = client.post(
         "/api/v1/portfolio", json=_add_payload("ZZAPIPF5"), headers=headers
     ).json()
+    holding_id = created["lots"][0]["holding_id"]
 
-    response = client.delete(f"/api/v1/portfolio/{created['id']}", headers=headers)
+    response = client.delete(f"/api/v1/portfolio/{holding_id}", headers=headers)
     assert response.status_code == 200
 
-    second_delete = client.delete(f"/api/v1/portfolio/{created['id']}", headers=headers)
+    second_delete = client.delete(f"/api/v1/portfolio/{holding_id}", headers=headers)
     assert second_delete.status_code == 404
 
 
 def test_import_requires_authentication() -> None:
     files = {"file": ("holdings.csv", _STANDARD_HEADER + "\n", "text/csv")}
-    response = client.post("/api/v1/portfolio/import", files=files)
+    response = client.post(
+        "/api/v1/portfolio/import", files=files, data={"broker": "zerodha"}
+    )
     assert response.status_code == 401
 
 
-def test_import_rejects_non_csv_filename(db: Session) -> None:
+def test_import_requires_a_broker_field(db: Session) -> None:
+    headers = _auth_headers("nobroker_pf@example.com")
+    files = {"file": ("holdings.csv", _STANDARD_HEADER + "\nTCS,1,1\n", "text/csv")}
+    response = client.post("/api/v1/portfolio/import", files=files, headers=headers)
+    assert response.status_code == 422
+
+
+def test_import_rejects_an_invalid_broker_value(db: Session) -> None:
+    headers = _auth_headers("badbroker_pf@example.com")
+    response = _import(headers, _STANDARD_HEADER + "\nTCS,1,1\n", "groww")
+    assert response.status_code == 422
+
+
+def test_import_rejects_unsupported_file_extension(db: Session) -> None:
     headers = _auth_headers("badext_pf@example.com")
     files = {"file": ("holdings.txt", _STANDARD_HEADER + "\nTCS,1,1\n", "text/plain")}
-    response = client.post("/api/v1/portfolio/import", files=files, headers=headers)
+    response = client.post(
+        "/api/v1/portfolio/import", files=files, data={"broker": "zerodha"}, headers=headers
+    )
     assert response.status_code == 400
 
 
 def test_import_rejects_empty_file(db: Session) -> None:
     headers = _auth_headers("emptyfile_pf@example.com")
-    files = {"file": ("holdings.csv", "", "text/csv")}
-    response = client.post("/api/v1/portfolio/import", files=files, headers=headers)
+    response = _import(headers, "", "zerodha")
     assert response.status_code == 400
 
 
 def test_import_rejects_oversized_file(db: Session) -> None:
     headers = _auth_headers("oversized_pf@example.com")
     oversized = _STANDARD_HEADER + "\n" + ("A" * (6 * 1024 * 1024))
-    files = {"file": ("holdings.csv", oversized, "text/csv")}
-    response = client.post("/api/v1/portfolio/import", files=files, headers=headers)
+    response = _import(headers, oversized, "zerodha")
     assert response.status_code == 400
 
 
@@ -149,9 +174,8 @@ def test_import_returns_mixed_summary(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF6")
     headers = _auth_headers("mixedimport_pf@example.com")
     csv_text = _STANDARD_HEADER + "\nZZAPIPF6,5,50\nZZDOESNOTEXIST,1,1\n"
-    files = {"file": ("holdings.csv", csv_text, "text/csv")}
 
-    response = client.post("/api/v1/portfolio/import", files=files, headers=headers)
+    response = _import(headers, csv_text, "zerodha")
 
     assert response.status_code == 200
     body = response.json()
@@ -162,15 +186,75 @@ def test_import_returns_mixed_summary(db: Session) -> None:
     assert statuses["ZZDOESNOTEXIST"] == "skipped"
 
 
-def test_import_only_touches_the_caller_s_own_holdings(db: Session) -> None:
+def test_import_xlsx_upload(db: Session) -> None:
+    import io
+
+    import openpyxl
+
     _seed_asset(db, "ZZAPIPF7")
+    headers = _auth_headers("xlsximport_pf@example.com")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Instrument", "Qty.", "Avg. cost"])
+    ws.append(["ZZAPIPF7", 5, 50])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    files = {
+        "file": (
+            "holdings.xlsx",
+            buf.getvalue(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+    response = client.post(
+        "/api/v1/portfolio/import", files=files, data={"broker": "upstox"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 1
+
+
+def test_two_broker_imports_consolidate_into_one_row(db: Session) -> None:
+    _seed_asset(db, "ZZAPIPF8")
+    headers = _auth_headers("twobroker_pf@example.com")
+
+    _import(headers, _STANDARD_HEADER + "\nZZAPIPF8,10,100\n", "zerodha")
+    _import(headers, _STANDARD_HEADER + "\nZZAPIPF8,5,120\n", "upstox")
+
+    portfolio = client.get("/api/v1/portfolio", headers=headers).json()
+    assert len(portfolio["holdings"]) == 1
+    holding = portfolio["holdings"][0]
+    assert holding["quantity"] == 15.0
+    assert holding["cost_basis"] == 10 * 100 + 5 * 120
+    assert {lot["broker"] for lot in holding["lots"]} == {"zerodha", "upstox"}
+
+
+def test_reimporting_one_broker_does_not_wipe_the_other(db: Session) -> None:
+    _seed_asset(db, "ZZAPIPF9")
+    headers = _auth_headers("noreimportwipe_pf@example.com")
+
+    _import(headers, _STANDARD_HEADER + "\nZZAPIPF9,10,100\n", "zerodha")
+    _import(headers, _STANDARD_HEADER + "\nZZAPIPF9,5,120\n", "upstox")
+    # Re-import zerodha with an unrelated file that drops ZZAPIPF9 entirely.
+    _seed_asset(db, "ZZAPIPF10")
+    _import(headers, _STANDARD_HEADER + "\nZZAPIPF10,1,1\n", "zerodha")
+
+    portfolio = client.get("/api/v1/portfolio", headers=headers).json()
+    holding = next(h for h in portfolio["holdings"] if h["symbol"] == "ZZAPIPF9")
+    # Only the upstox lot should remain for ZZAPIPF9.
+    assert holding["quantity"] == 5.0
+    assert {lot["broker"] for lot in holding["lots"]} == {"upstox"}
+
+
+def test_import_only_touches_the_caller_s_own_holdings(db: Session) -> None:
+    _seed_asset(db, "ZZAPIPF11")
     alice_headers = _auth_headers("alice_import_pf@example.com")
     bob_headers = _auth_headers("bob_import_pf@example.com")
-    client.post("/api/v1/portfolio", json=_add_payload("ZZAPIPF7"), headers=bob_headers)
+    client.post("/api/v1/portfolio", json=_add_payload("ZZAPIPF11"), headers=bob_headers)
 
-    csv_text = _STANDARD_HEADER + "\nZZAPIPF7,9,99\n"
-    files = {"file": ("holdings.csv", csv_text, "text/csv")}
-    client.post("/api/v1/portfolio/import", files=files, headers=alice_headers)
+    _import(alice_headers, _STANDARD_HEADER + "\nZZAPIPF11,9,99\n", "zerodha")
 
     bob_portfolio = client.get("/api/v1/portfolio", headers=bob_headers).json()
     assert bob_portfolio["holdings"][0]["quantity"] == 10  # untouched by Alice's import
