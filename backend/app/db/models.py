@@ -447,7 +447,7 @@ class Thesis(Base):
 
 class ThesisTrigger(Base):
     """One invalidation condition (`metric operator threshold`, e.g.
-    debt_to_equity > 1.5) — see app/services/thesis_metrics.py for the
+    debt_to_equity > 1.5) — see app/services/metric_registry.py for the
     registry of resolvable `metric` keys and app/engines/thesis/base.py
     for how `operator`/`threshold` get evaluated against an observed value.
 

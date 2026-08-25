@@ -27,7 +27,7 @@ class ScoreInputs:
     drawdown_pct: float | None = None
     # Yahoo's `debtToEquity` is a PERCENTAGE, not a ratio (live Nifty 500
     # median ~23.8, i.e. 0.24x). Kept in the source's own unit here because
-    # that's what the UI displays and what thesis_metrics.py exposes under
+    # that's what the UI displays and what metric_registry.py exposes under
     # the same name; components.fundamental_quality does the conversion.
     debt_to_equity: float | None = None
     gross_margins: float | None = None

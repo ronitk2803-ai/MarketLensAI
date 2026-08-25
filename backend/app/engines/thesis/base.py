@@ -2,7 +2,7 @@
 "engines are deterministic and unit-testable" convention as
 app/engines/opportunity/base.py's Screen. Resolving *what* the current
 value of a metric is (the actual database/computation work) belongs in
-app/services/thesis_metrics.py; this module only knows how to compare an
+app/services/metric_registry.py; this module only knows how to compare an
 already-resolved value against a threshold.
 """
 

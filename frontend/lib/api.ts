@@ -236,6 +236,95 @@ export interface OpportunityHit {
   industry: string | null;
 }
 
+// Combinable screener (Build_plan.md §K, P2 step 22) — a user-authored
+// AND/OR condition tree over the shared metric registry, rather than one
+// preset screen at a time.
+
+export type ScreenerOperator = "gt" | "lt" | "gte" | "lte";
+
+export interface ScreenerCondition {
+  metric: string;
+  operator: ScreenerOperator;
+  threshold: number;
+}
+
+export interface ScreenerGroup {
+  op: "and" | "or";
+  children: ScreenerNode[];
+}
+
+export type ScreenerNode = ScreenerGroup | ScreenerCondition;
+
+export function isScreenerGroup(node: ScreenerNode): node is ScreenerGroup {
+  return "op" in node;
+}
+
+/** How a threshold should be read. Yahoo isn't internally consistent —
+ * debt_to_equity is a percentage (23.8 means 0.24x) while the growth and
+ * margin ratios are fractions (0.15 means 15%) — so the builder labels
+ * every threshold input from this. */
+export type ScreenerMetricUnit =
+  | "percent"
+  | "fraction"
+  | "ratio"
+  | "multiple"
+  | "price"
+  | "index";
+
+export interface ScreenerMetric {
+  key: string;
+  label: string;
+  unit: ScreenerMetricUnit;
+  group: "price" | "technical" | "valuation" | "fundamental";
+  required_bars: number;
+}
+
+/** Per-metric evaluable counts. A condition excludes assets whose metric
+ * is missing, which is correct — but reporting it is what keeps "no data"
+ * distinguishable from "no match". */
+export interface ScreenerCoverage {
+  metric: string;
+  available: number;
+  total: number;
+}
+
+export interface ScreenerMeta extends Meta {
+  universe_size: number;
+  coverage: ScreenerCoverage[];
+}
+
+export function getScreenerMetrics() {
+  return apiFetch<ScreenerMetric[]>("/screener/metrics", { next: { revalidate: 3600 } });
+}
+
+/** Sign-in required: a full universe scan is the most expensive thing this
+ * app does, and there's no rate limiter, so the auth gate is what bounds
+ * it. POSTs are never cached by Next, hence no `revalidate`. */
+export async function runScreener(
+  accessToken: string,
+  tree: ScreenerGroup,
+  industry?: string,
+): Promise<{ data: OpportunityHit[]; meta: ScreenerMeta }> {
+  const res = await fetch(`${API_BASE_URL}/screener/run`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ tree, industry: industry ?? null }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const detail = await res
+      .json()
+      .then((body: unknown) =>
+        typeof body === "object" && body !== null && "detail" in body
+          ? String((body as { detail: unknown }).detail)
+          : undefined,
+      )
+      .catch(() => undefined);
+    throw new ApiError("Screener request failed", res.status, detail);
+  }
+  return res.json() as Promise<{ data: OpportunityHit[]; meta: ScreenerMeta }>;
+}
+
 export function getOpportunities(screen: string, industry?: string) {
   const params = new URLSearchParams({ screen });
   if (industry) params.set("industry", industry);

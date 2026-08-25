@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Asset, Thesis, ThesisEvent, ThesisTrigger
 from app.engines.thesis import evaluate_trigger
-from app.services.thesis_metrics import resolve_metric_value
+from app.services.metric_registry import resolve_metric_value
 
 logger = logging.getLogger(__name__)
 

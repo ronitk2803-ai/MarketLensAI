@@ -20,7 +20,14 @@ from app.services.corporate_actions import get_stored_corporate_actions_bulk
 from app.services.prices import row_to_bar
 
 
-def _load_universe_bars(db: Session, lookback_days: int) -> dict[AssetRef, list[Bar]]:
+def load_universe_bars_with_ids(
+    db: Session, lookback_days: int
+) -> tuple[dict[AssetRef, list[Bar]], dict[AssetRef, int]]:
+    """Same as _load_universe_bars, but also hands back each AssetRef's
+    row id. AssetRef is a provider-agnostic value object with no id on it
+    (app/domain/models.py), so a caller that needs to query another table
+    keyed by asset_id — the screener's bulk ratio read — has no way to get
+    there from the universe dict alone."""
     cutoff = dt.date.today() - dt.timedelta(days=lookback_days)
     rows = (
         db.query(PriceOHLCV, Asset)
@@ -56,10 +63,18 @@ def _load_universe_bars(db: Session, lookback_days: int) -> dict[AssetRef, list[
     actions_by_asset = get_stored_corporate_actions_bulk(db, list(bars_by_asset))
 
     universe: dict[AssetRef, list[Bar]] = {}
+    ids: dict[AssetRef, int] = {}
     for asset_id, price_rows in bars_by_asset.items():
         raw_bars = [row_to_bar(r) for r in price_rows]
         actions = actions_by_asset.get(asset_id, [])
-        universe[asset_refs[asset_id]] = adjust_bars(raw_bars, actions)
+        ref = asset_refs[asset_id]
+        universe[ref] = adjust_bars(raw_bars, actions)
+        ids[ref] = asset_id
+    return universe, ids
+
+
+def _load_universe_bars(db: Session, lookback_days: int) -> dict[AssetRef, list[Bar]]:
+    universe, _ = load_universe_bars_with_ids(db, lookback_days)
     return universe
 
 

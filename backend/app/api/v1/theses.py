@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.models import AppUser, Thesis, ThesisEvent, ThesisTrigger
 from app.db.session import get_db
+from app.services.metric_registry import METRIC_KEYS
 from app.services.thesis import (
     TriggerInput,
     create_thesis,
@@ -23,7 +24,6 @@ from app.services.thesis import (
     list_theses,
     update_thesis,
 )
-from app.services.thesis_metrics import METRIC_KEYS
 
 router = APIRouter(prefix="/theses", tags=["theses"])
 
