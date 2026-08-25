@@ -3,32 +3,27 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Client-only persistence for the watchlist widget: which symbols and which
- * three delta windows the user has chosen. Build_plan.md §Q lists a real
- * watchlist as out of MVP scope specifically because it needs accounts
- * (P1, not built) — this gets the feature without that prerequisite by
- * keeping the list in the browser rather than a user_id-scoped table. It
- * will not follow the user across devices; that's the tradeoff for not
- * needing to log in.
+ * Client-only persistence for the watchlist widget's delta-window choice
+ * (which three trading-session windows show as columns) — a display
+ * preference, not data, so it stays in the browser even though the
+ * watchlist's actual membership moved to the account-backed
+ * GET/POST/DELETE /api/watchlist* endpoints (P1: see WatchlistPanel.tsx).
  *
- * localStorage as a `useSyncExternalStore` source, same idiom as
- * useIsLightTheme in lib/use-theme.ts: the server can't read localStorage,
- * so getServerSnapshot returns the empty default and React reconciles to
- * the real client value after mount. That sidesteps both the hydration
- * mismatch AND the "setState synchronously in a mount effect" pattern the
- * lint rule (react-hooks/set-state-in-effect) correctly objects to — there
- * is no effect here at all, the store is read during render.
+ * Before accounts existed, this module also held *which symbols* were on
+ * the list (the same reasoning that still applies to the delta window
+ * today — Build_plan.md §Q: a real watchlist needs accounts). That's gone
+ * now that there's somewhere real to put it; readLocalWatchlistSymbols/
+ * clearLocalWatchlistSymbols below are what's left of it, kept only long
+ * enough to import whatever an already-existing anonymous list had on it
+ * into a freshly-created account (see WatchlistPanel.tsx's first-load
+ * effect) — a one-shot read, not a live-updating hook, since nothing
+ * writes new symbols there anymore.
  */
 
 const SYMBOLS_KEY = "mlai-watchlist-symbols";
 const DELTAS_KEY = "mlai-watchlist-deltas";
 
 export const DEFAULT_DELTA_DAYS: [number, number, number] = [7, 14, 30];
-const EMPTY_SYMBOLS: string[] = [];
-
-function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((x) => typeof x === "string");
-}
 
 function isDeltaTriple(v: unknown): v is [number, number, number] {
   return Array.isArray(v) && v.length === 3 && v.every((n) => Number.isInteger(n) && n > 0);
@@ -80,21 +75,11 @@ function createStore<T>(key: string, fallback: T, isValid: (v: unknown) => v is 
   };
 }
 
-const symbolsStore = createStore<string[]>(SYMBOLS_KEY, EMPTY_SYMBOLS, isStringArray);
 const deltaStore = createStore<[number, number, number]>(
   DELTAS_KEY,
   DEFAULT_DELTA_DAYS,
   isDeltaTriple,
 );
-
-export function useWatchlistSymbols(): [string[], (next: string[]) => void] {
-  const symbols = useSyncExternalStore(
-    symbolsStore.subscribe,
-    symbolsStore.getSnapshot,
-    symbolsStore.getServerSnapshot,
-  );
-  return [symbols, symbolsStore.set];
-}
 
 export function useDeltaDays(): [
   [number, number, number],
@@ -106,4 +91,27 @@ export function useDeltaDays(): [
     deltaStore.getServerSnapshot,
   );
   return [days, deltaStore.set];
+}
+
+/** One-shot, non-reactive — call once (e.g. on first authenticated load),
+ * not from render. Returns [] on anything unexpected (private-mode
+ * storage denial, corrupted JSON) rather than throwing, same tolerance
+ * the old symbol store had. */
+export function readLocalWatchlistSymbols(): string[] {
+  try {
+    const raw = localStorage.getItem(SYMBOLS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((s) => typeof s === "string") ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearLocalWatchlistSymbols(): void {
+  try {
+    localStorage.removeItem(SYMBOLS_KEY);
+  } catch {
+    // Nothing to clean up if storage was never writable in the first place.
+  }
 }

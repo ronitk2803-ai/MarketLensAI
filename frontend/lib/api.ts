@@ -310,12 +310,35 @@ export interface WatchlistResponse {
   unknown_symbols: string[];
 }
 
-export function getWatchlistQuotes(symbols: string[], deltaDays: number[]) {
-  const params = new URLSearchParams({
-    symbols: symbols.join(","),
-    deltas: deltaDays.join(","),
+/** Account-backed as of P1 — membership lives server-side per user, so
+ * every call needs the caller's access token; there's no anonymous
+ * "give me quotes for these symbols" path anymore (see
+ * app/services/watchlist.py's module docstring on the backend). Still the
+ * {data, meta} envelope (apiFetch, not apiFetchRaw) — GET /watchlist
+ * returns market-data provenance like every other data-reading endpoint;
+ * only the add/remove actions below are bare-JSON like auth. */
+export function getWatchlist(accessToken: string, deltaDays: number[]) {
+  const params = new URLSearchParams({ deltas: deltaDays.join(",") });
+  return apiFetch<WatchlistResponse>(`/watchlist?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  }).then((e) => e.data);
+}
+
+export function addToWatchlist(accessToken: string, symbol: string) {
+  return apiFetchRaw<{ status: string }>(`/watchlist/${encodeURIComponent(symbol)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
   });
-  return apiFetch<WatchlistResponse>(`/watchlist/quotes?${params.toString()}`).then((e) => e.data);
+}
+
+export function removeFromWatchlist(accessToken: string, symbol: string) {
+  return apiFetchRaw<{ status: string }>(`/watchlist/${encodeURIComponent(symbol)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
 }
 
 export interface DayCandle {

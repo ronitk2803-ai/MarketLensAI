@@ -3,8 +3,13 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, CorporateAction, PriceOHLCV
-from app.services.watchlist import get_watchlist_quotes
+from app.db.models import AppUser, Asset, CorporateAction, PriceOHLCV
+from app.services.watchlist import (
+    add_to_watchlist,
+    get_watchlist_quotes,
+    get_watchlist_symbols,
+    remove_from_watchlist,
+)
 
 
 def _add_bars(
@@ -198,3 +203,82 @@ def test_range_stats_use_corporate_action_adjusted_bars(db: Session) -> None:
     assert stat is not None
     # Pre-split 200s adjust down to 100, so the honest high is 105, not 200.
     assert stat.high == 105.0
+
+
+def _user(db: Session, email: str) -> AppUser:
+    user = AppUser(email=email, hashed_password="not-a-real-hash")
+    db.add(user)
+    db.flush()
+    return user
+
+
+def test_get_watchlist_symbols_is_empty_for_a_new_user(db: Session) -> None:
+    user = _user(db, "empty@example.com")
+
+    assert get_watchlist_symbols(db, user.id) == []
+
+
+def test_add_to_watchlist_persists_and_is_listed(db: Session) -> None:
+    user = _user(db, "add@example.com")
+    _asset(db, "ZZWLADD")
+
+    added = add_to_watchlist(db, user.id, "zzwladd")  # lowercase, like a user might type
+
+    assert added is True
+    assert get_watchlist_symbols(db, user.id) == ["ZZWLADD"]
+
+
+def test_add_to_watchlist_returns_false_for_an_unknown_symbol(db: Session) -> None:
+    user = _user(db, "unknown@example.com")
+
+    added = add_to_watchlist(db, user.id, "ZZNOSUCHSTOCK")
+
+    assert added is False
+    assert get_watchlist_symbols(db, user.id) == []
+
+
+def test_add_to_watchlist_twice_is_not_an_error_and_not_a_duplicate(db: Session) -> None:
+    user = _user(db, "dup@example.com")
+    _asset(db, "ZZWLDUP")
+
+    assert add_to_watchlist(db, user.id, "ZZWLDUP") is True
+    assert add_to_watchlist(db, user.id, "ZZWLDUP") is True
+    assert get_watchlist_symbols(db, user.id) == ["ZZWLDUP"]
+
+
+def test_remove_from_watchlist_removes_it(db: Session) -> None:
+    user = _user(db, "remove@example.com")
+    _asset(db, "ZZWLRM")
+    add_to_watchlist(db, user.id, "ZZWLRM")
+
+    remove_from_watchlist(db, user.id, "ZZWLRM")
+
+    assert get_watchlist_symbols(db, user.id) == []
+
+
+def test_remove_from_watchlist_is_a_no_op_for_something_never_added(db: Session) -> None:
+    user = _user(db, "noop@example.com")
+    _asset(db, "ZZWLNOOP")
+
+    remove_from_watchlist(db, user.id, "ZZWLNOOP")  # must not raise
+
+    assert get_watchlist_symbols(db, user.id) == []
+
+
+def test_remove_from_watchlist_is_a_no_op_for_an_unknown_symbol(db: Session) -> None:
+    user = _user(db, "noop2@example.com")
+
+    remove_from_watchlist(db, user.id, "ZZNOSUCHSTOCK")  # must not raise
+
+
+def test_watchlists_are_isolated_per_user(db: Session) -> None:
+    alice = _user(db, "alice@example.com")
+    bob = _user(db, "bob@example.com")
+    _asset(db, "ZZWLALICE")
+    _asset(db, "ZZWLBOB")
+
+    add_to_watchlist(db, alice.id, "ZZWLALICE")
+    add_to_watchlist(db, bob.id, "ZZWLBOB")
+
+    assert get_watchlist_symbols(db, alice.id) == ["ZZWLALICE"]
+    assert get_watchlist_symbols(db, bob.id) == ["ZZWLBOB"]

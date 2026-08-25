@@ -45,75 +45,111 @@ def _seed(db: Session, symbol: str, closes: list[float]) -> None:
     db.flush()
 
 
-def test_quotes_for_known_symbols(db: Session) -> None:
+def _auth_headers(email: str) -> dict[str, str]:
+    """Registers a fresh account through the real endpoint (not a shortcut
+    through the service layer) so these tests exercise the actual token a
+    browser would present, then returns the header to send it with."""
+    response = client.post(
+        "/api/v1/auth/register", json={"email": email, "password": "password123"}
+    )
+    access_token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+def test_watchlist_requires_authentication() -> None:
+    response = client.get("/api/v1/watchlist")
+    assert response.status_code == 401
+
+
+def test_add_requires_authentication() -> None:
+    response = client.post("/api/v1/watchlist/ZZAPIWL1")
+    assert response.status_code == 401
+
+
+def test_remove_requires_authentication() -> None:
+    response = client.delete("/api/v1/watchlist/ZZAPIWL1")
+    assert response.status_code == 401
+
+
+def test_watchlist_is_empty_for_a_new_account() -> None:
+    headers = _auth_headers("newacct@example.com")
+
+    response = client.get("/api/v1/watchlist", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"quotes": [], "unknown_symbols": []}
+
+
+def test_add_then_list_returns_the_quote(db: Session) -> None:
     _seed(db, "ZZAPIWL1", [100.0, 105.0, 110.0])
+    headers = _auth_headers("addlist@example.com")
 
-    response = client.get(
-        "/api/v1/watchlist/quotes", params={"symbols": "ZZAPIWL1", "deltas": "7"}
-    )
+    add = client.post("/api/v1/watchlist/ZZAPIWL1", headers=headers)
+    assert add.status_code == 200
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["data"]["quotes"][0]["symbol"] == "ZZAPIWL1"
-    assert body["data"]["quotes"][0]["close"] == 110.0
-    assert body["data"]["unknown_symbols"] == []
-
-
-def test_unknown_symbol_reported_not_500d(db: Session) -> None:
-    response = client.get(
-        "/api/v1/watchlist/quotes", params={"symbols": "ZZDOESNOTEXIST", "deltas": "7"}
-    )
+    response = client.get("/api/v1/watchlist", params={"deltas": "7"}, headers=headers)
 
     assert response.status_code == 200
-    assert response.json()["data"]["unknown_symbols"] == ["ZZDOESNOTEXIST"]
+    quotes = response.json()["data"]["quotes"]
+    assert quotes[0]["symbol"] == "ZZAPIWL1"
+    assert quotes[0]["close"] == 110.0
 
 
-def test_mixed_known_and_unknown_symbols(db: Session) -> None:
+def test_add_unknown_symbol_404s(db: Session) -> None:
+    headers = _auth_headers("addunknown@example.com")
+
+    response = client.post("/api/v1/watchlist/ZZDOESNOTEXIST", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_remove_takes_it_off_the_list(db: Session) -> None:
     _seed(db, "ZZAPIWL2", [100.0])
+    headers = _auth_headers("remove@example.com")
+    client.post("/api/v1/watchlist/ZZAPIWL2", headers=headers)
 
-    response = client.get(
-        "/api/v1/watchlist/quotes",
-        params={"symbols": "ZZAPIWL2,ZZGHOST", "deltas": "7"},
-    )
+    remove = client.delete("/api/v1/watchlist/ZZAPIWL2", headers=headers)
+    assert remove.status_code == 200
 
-    body = response.json()["data"]
-    assert {q["symbol"] for q in body["quotes"]} == {"ZZAPIWL2"}
-    assert body["unknown_symbols"] == ["ZZGHOST"]
+    response = client.get("/api/v1/watchlist", headers=headers)
+    assert response.json()["data"]["quotes"] == []
 
 
-def test_rejects_empty_symbol_list() -> None:
-    response = client.get("/api/v1/watchlist/quotes", params={"symbols": ""})
-    assert response.status_code == 400
+def test_remove_never_added_symbol_is_not_an_error(db: Session) -> None:
+    _seed(db, "ZZAPIWL3", [100.0])
+    headers = _auth_headers("removenoop@example.com")
+
+    response = client.delete("/api/v1/watchlist/ZZAPIWL3", headers=headers)
+
+    assert response.status_code == 200
 
 
 def test_rejects_non_integer_deltas(db: Session) -> None:
-    _seed(db, "ZZAPIWL3", [100.0])
+    _seed(db, "ZZAPIWL4", [100.0])
+    headers = _auth_headers("deltas1@example.com")
+    client.post("/api/v1/watchlist/ZZAPIWL4", headers=headers)
+
     response = client.get(
-        "/api/v1/watchlist/quotes", params={"symbols": "ZZAPIWL3", "deltas": "seven"}
+        "/api/v1/watchlist", params={"deltas": "seven"}, headers=headers
     )
     assert response.status_code == 400
 
 
 def test_rejects_zero_or_negative_delta_windows(db: Session) -> None:
-    _seed(db, "ZZAPIWL4", [100.0])
-    response = client.get(
-        "/api/v1/watchlist/quotes", params={"symbols": "ZZAPIWL4", "deltas": "0"}
-    )
+    _seed(db, "ZZAPIWL5", [100.0])
+    headers = _auth_headers("deltas2@example.com")
+    client.post("/api/v1/watchlist/ZZAPIWL5", headers=headers)
+
+    response = client.get("/api/v1/watchlist", params={"deltas": "0"}, headers=headers)
     assert response.status_code == 400
 
 
-def test_symbol_list_is_capped(db: Session) -> None:
-    many = ",".join(f"ZZBOGUS{i}" for i in range(80))
-    response = client.get("/api/v1/watchlist/quotes", params={"symbols": many, "deltas": "7"})
-
-    assert response.status_code == 200
-    total = len(response.json()["data"]["unknown_symbols"])
-    assert total == 50  # MAX_SYMBOLS, not the 80 requested
-
-
 def test_deltas_default_to_7_14_30_when_omitted(db: Session) -> None:
-    _seed(db, "ZZAPIWL5", [100.0] * 40)
-    response = client.get("/api/v1/watchlist/quotes", params={"symbols": "ZZAPIWL5"})
+    _seed(db, "ZZAPIWL6", [100.0] * 40)
+    headers = _auth_headers("deltas3@example.com")
+    client.post("/api/v1/watchlist/ZZAPIWL6", headers=headers)
+
+    response = client.get("/api/v1/watchlist", headers=headers)
 
     assert response.status_code == 200
     deltas = response.json()["data"]["quotes"][0]["deltas"]
@@ -121,14 +157,32 @@ def test_deltas_default_to_7_14_30_when_omitted(db: Session) -> None:
 
 
 def test_response_includes_range_stats_and_spark(db: Session) -> None:
-    _seed(db, "ZZAPIWL6", [50.0, 200.0, 30.0, 100.0])
+    _seed(db, "ZZAPIWL7", [50.0, 200.0, 30.0, 100.0])
+    headers = _auth_headers("rangestats@example.com")
+    client.post("/api/v1/watchlist/ZZAPIWL7", headers=headers)
 
-    response = client.get(
-        "/api/v1/watchlist/quotes", params={"symbols": "ZZAPIWL6", "deltas": "7"}
-    )
+    response = client.get("/api/v1/watchlist", headers=headers)
 
     quote = response.json()["data"]["quotes"][0]
     assert quote["all_time"]["high"] == 200.0
     assert quote["all_time"]["low"] == 30.0
     assert quote["week_52"] is not None
     assert isinstance(quote["spark"], list) and len(quote["spark"]) > 0
+
+
+def test_watchlists_are_isolated_per_account(db: Session) -> None:
+    _seed(db, "ZZAPIWLALICE", [100.0])
+    _seed(db, "ZZAPIWLBOB", [100.0])
+    alice_headers = _auth_headers("alice@example.com")
+    bob_headers = _auth_headers("bob@example.com")
+
+    client.post("/api/v1/watchlist/ZZAPIWLALICE", headers=alice_headers)
+    client.post("/api/v1/watchlist/ZZAPIWLBOB", headers=bob_headers)
+
+    alice_quotes = client.get("/api/v1/watchlist", headers=alice_headers).json()["data"]["quotes"]
+    bob_quotes = client.get("/api/v1/watchlist", headers=bob_headers).json()["data"]["quotes"]
+    alice_symbols = {q["symbol"] for q in alice_quotes}
+    bob_symbols = {q["symbol"] for q in bob_quotes}
+
+    assert alice_symbols == {"ZZAPIWLALICE"}
+    assert bob_symbols == {"ZZAPIWLBOB"}

@@ -5,6 +5,7 @@ import { WatchlistPanel } from "@/components/domain/WatchlistPanel";
 import { Panel } from "@/components/terminal/Panel";
 import { getOpportunities, getOpportunityIndustries } from "@/lib/api";
 import { tradingDate } from "@/lib/format";
+import { getSignedInUser } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import type { OpportunityHit } from "@/lib/api";
 
@@ -39,9 +40,10 @@ export default async function Home({
 }: {
   searchParams: Promise<{ industry?: string }>;
 }) {
-  const [{ industry: rawIndustry }, industriesResult] = await Promise.all([
+  const [{ industry: rawIndustry }, industriesResult, user] = await Promise.all([
     searchParams,
     getOpportunityIndustries().catch(() => ({ data: [] })),
+    getSignedInUser(),
   ]);
   const industries = industriesResult.data;
   // An industry from an old bookmark/link that's since been renamed falls
@@ -85,7 +87,7 @@ export default async function Home({
         </div>
       </div>
 
-      <WatchlistPanel />
+      <WatchlistPanel user={user} />
 
       {/* Filters every board below at once — same idea as the screen pills
           on /opportunities, applied here to industry instead of screen. */}

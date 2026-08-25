@@ -1,15 +1,17 @@
-"""Multi-symbol quote panel for a user-chosen watchlist.
+"""A user's watchlist: which symbols are on it (this module, account-backed
+as of P1 — see WatchlistItem) and what their quotes look like
+(get_watchlist_quotes, unchanged since before accounts existed).
 
-Deliberately stored-data-only, same discipline as opportunities.py: a
-watchlist is refreshed on every page load, so fetching live per symbol here
-would be the exact "N live API storms" pattern Build_plan.md §K rules out
-for screens. It reads whatever daily_ingestion has already landed.
+Quoting is deliberately stored-data-only, same discipline as
+opportunities.py: a watchlist is refreshed on every page load, so fetching
+live per symbol here would be the exact "N live API storms" pattern
+Build_plan.md §K rules out for screens. It reads whatever daily_ingestion
+has already landed.
 
-No persistence for *which* symbols are being watched — Build_plan.md §Q
-lists "watchlist" as explicitly out of MVP scope because a real one needs
-accounts (P1, not built). This gives the feature without that prerequisite:
-the frontend keeps the symbol list in the browser (localStorage) and asks
-this endpoint to quote whatever it's holding.
+Membership used to have no persistence at all — Build_plan.md §Q listed
+"watchlist" as explicitly out of MVP scope because a real one needs
+accounts, and the frontend kept the list in the browser (localStorage)
+instead. Now that accounts exist (P1), it's a real per-user table.
 """
 
 import datetime as dt
@@ -17,7 +19,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, PriceOHLCV
+from app.db.models import Asset, PriceOHLCV, WatchlistItem
 from app.domain.models import Bar
 from app.engines.adjustment import adjust_bars
 from app.services.corporate_actions import get_stored_corporate_actions
@@ -136,3 +138,53 @@ def get_watchlist_quotes(
         )
 
     return quotes, unknown
+
+
+def get_watchlist_symbols(db: Session, user_id: int) -> list[str]:
+    """In the order they were added — oldest first, matching how someone
+    would expect their own list to read back."""
+    rows = (
+        db.query(Asset.symbol)
+        .join(WatchlistItem, WatchlistItem.asset_id == Asset.id)
+        .filter(WatchlistItem.user_id == user_id)
+        .order_by(WatchlistItem.added_at)
+        .all()
+    )
+    return [symbol for (symbol,) in rows]
+
+
+def add_to_watchlist(db: Session, user_id: int, symbol: str) -> bool:
+    """False if `symbol` isn't a known active NSE asset (the API layer
+    turns that into a 404) — never silently creates a watchlist entry for
+    something that doesn't exist. True whether the item was newly added or
+    was already there; adding twice isn't an error, it's a no-op."""
+    asset = (
+        db.query(Asset)
+        .filter_by(symbol=symbol.strip().upper(), market="IN", exchange="NSE", active=True)
+        .one_or_none()
+    )
+    if asset is None:
+        return False
+    exists = (
+        db.query(WatchlistItem).filter_by(user_id=user_id, asset_id=asset.id).one_or_none()
+    )
+    if exists is None:
+        db.add(WatchlistItem(user_id=user_id, asset_id=asset.id))
+        db.flush()
+    return True
+
+
+def remove_from_watchlist(db: Session, user_id: int, symbol: str) -> None:
+    """Idempotent — a symbol that was never on the list, an unknown
+    symbol, or an already-removed one are all not errors; the caller only
+    cares that it's gone afterward, same as revoke_refresh_token for
+    logout."""
+    asset = (
+        db.query(Asset)
+        .filter_by(symbol=symbol.strip().upper(), market="IN", exchange="NSE")
+        .one_or_none()
+    )
+    if asset is None:
+        return
+    db.query(WatchlistItem).filter_by(user_id=user_id, asset_id=asset.id).delete()
+    db.flush()

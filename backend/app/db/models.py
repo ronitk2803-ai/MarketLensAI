@@ -370,3 +370,28 @@ class RefreshToken(Base):
     )
 
     user: Mapped["AppUser"] = relationship()
+
+
+class WatchlistItem(Base):
+    """One account's watchlist — deliberately just a flat (user, asset) set
+    rather than the `watchlist` + `watchlist_item` pair Build_plan.md §C
+    sketches (which anticipates multiple *named* lists, a P2 idea nothing
+    today needs): a single implicit list per user is the whole feature
+    that was actually asked for, and splitting this into two tables later
+    if named lists ever get built is a small additive migration, not a
+    rewrite.
+
+    `unique(user_id, asset_id)` doubles as "add" being naturally idempotent
+    at the DB level — the service layer still checks first so it can tell
+    the caller whether anything changed, but the constraint is the real
+    backstop against a race duplicating a row."""
+
+    __tablename__ = "watchlist_item"
+    __table_args__ = (UniqueConstraint("user_id", "asset_id", name="uq_watchlist_item_user_asset"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id"), index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), index=True)
+    added_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

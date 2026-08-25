@@ -1,24 +1,10 @@
-import { cookies } from "next/headers";
 import Link from "next/link";
 
 import { AccountControl } from "@/components/domain/AccountControl";
 import { SearchBox } from "@/components/domain/SearchBox";
 import { NavLink } from "@/components/domain/NavLink";
 import { ThemeToggle } from "@/components/domain/ThemeToggle";
-import { getCurrentUser } from "@/lib/api";
-import { ACCESS_TOKEN_COOKIE } from "@/lib/auth-cookies";
-
-/** Reads the session cookie and asks the backend who it belongs to —
- * straight to lib/api.ts, not through a Route Handler, since this is a
- * Server Component and can reach API_BASE_URL directly (same as
- * getCompany/getPrices elsewhere). A missing/expired/invalid token all
- * just mean "signed out" here; get_current_user does the same on the
- * backend and there's nothing more specific worth telling this header. */
-async function getSignedInUser() {
-  const accessToken = (await cookies()).get(ACCESS_TOKEN_COOKIE)?.value;
-  if (!accessToken) return null;
-  return getCurrentUser(accessToken);
-}
+import { getSignedInUser } from "@/lib/session";
 
 export async function AppHeader() {
   const user = await getSignedInUser();

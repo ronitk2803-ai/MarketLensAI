@@ -1,18 +1,25 @@
-"""Multi-symbol quote panel (see app/services/watchlist.py for why this has
-no server-side persistence — the frontend supplies the symbol list on every
-call from its own localStorage)."""
+"""A signed-in user's watchlist — membership (app/services/watchlist.py's
+get/add/remove_*) plus quotes for whatever's on it (get_watchlist_quotes,
+unchanged from before accounts existed)."""
 
 import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
+from app.db.models import AppUser
 from app.db.session import get_db
-from app.services.watchlist import RangeStat, get_watchlist_quotes
+from app.services.watchlist import (
+    RangeStat,
+    add_to_watchlist,
+    get_watchlist_quotes,
+    get_watchlist_symbols,
+    remove_from_watchlist,
+)
 
 router = APIRouter(tags=["watchlist"])
 
-MAX_SYMBOLS = 50
 MAX_DELTA_WINDOWS = 3
 
 
@@ -33,25 +40,29 @@ def _range_stat_to_dict(stat: RangeStat | None) -> dict | None:
     return {"high": stat.high, "low": stat.low, "position": stat.position, "since": stat.since}
 
 
-@router.get("/watchlist/quotes")
-def watchlist_quotes(
-    symbols: str = Query(..., description="Comma-separated NSE symbols"),
-    deltas: str = Query("7,14,30", description="Comma-separated trading-session windows"),
-    db: Session = Depends(get_db),
-) -> dict:
-    symbol_list = [s for s in symbols.split(",") if s.strip()][:MAX_SYMBOLS]
-    if not symbol_list:
-        raise HTTPException(status_code=400, detail="no symbols given")
-
+def _parse_deltas(deltas: str) -> list[int]:
     try:
         delta_list = [int(d) for d in deltas.split(",") if d.strip()][:MAX_DELTA_WINDOWS]
     except ValueError as error:
         raise HTTPException(status_code=400, detail="deltas must be integers") from error
     if any(d <= 0 for d in delta_list):
         raise HTTPException(status_code=400, detail="delta windows must be positive")
+    return delta_list
 
-    quotes, unknown = get_watchlist_quotes(db, symbol_list, delta_days=delta_list)
 
+@router.get("/watchlist")
+def watchlist(
+    deltas: str = Query("7,14,30", description="Comma-separated trading-session windows"),
+    current_user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    delta_list = _parse_deltas(deltas)
+    symbols = get_watchlist_symbols(db, current_user.id)
+
+    if not symbols:
+        return _envelope({"quotes": [], "unknown_symbols": []}, source="db", confidence="low")
+
+    quotes, unknown = get_watchlist_quotes(db, symbols, delta_days=delta_list)
     data = {
         "quotes": [
             {
@@ -70,3 +81,25 @@ def watchlist_quotes(
         "unknown_symbols": unknown,
     }
     return _envelope(data, source="db", confidence="high" if quotes else "low")
+
+
+@router.post("/watchlist/{symbol}")
+def add_watchlist_item(
+    symbol: str,
+    current_user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    added = add_to_watchlist(db, current_user.id, symbol)
+    if not added:
+        raise HTTPException(status_code=404, detail=f"unknown asset: {symbol}")
+    return {"status": "ok"}
+
+
+@router.delete("/watchlist/{symbol}")
+def remove_watchlist_item(
+    symbol: str,
+    current_user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    remove_from_watchlist(db, current_user.id, symbol)
+    return {"status": "ok"}

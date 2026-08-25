@@ -2,18 +2,22 @@
 
 import { Plus, X } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Delta } from "@/components/terminal/Delta";
 import { Panel } from "@/components/terminal/Panel";
 import { RangeBar } from "@/components/terminal/RangeBar";
 import { Sparkline } from "@/components/terminal/Sparkline";
-import type { AssetSearchResult, LiveQuote, WatchlistQuote } from "@/lib/api";
+import type { AssetSearchResult, AuthUser, LiveQuote, WatchlistQuote } from "@/lib/api";
 import { price, tradingDate } from "@/lib/format";
 import { useLiveQuotes } from "@/lib/use-live-quotes";
 import { usePriceFlash } from "@/lib/use-price-flash";
 import { cn } from "@/lib/utils";
-import { useDeltaDays, useWatchlistSymbols } from "@/lib/watchlist-storage";
+import {
+  clearLocalWatchlistSymbols,
+  readLocalWatchlistSymbols,
+  useDeltaDays,
+} from "@/lib/watchlist-storage";
 
 /**
  * User-curated multi-symbol quote panel for the home dashboard.
@@ -26,73 +30,124 @@ import { useDeltaDays, useWatchlistSymbols } from "@/lib/watchlist-storage";
  * previous close, and falls back to the stored close (labelled with its own
  * date) whenever the session is shut or the provider is unreachable.
  *
- * No account system exists yet (Build_plan.md §Q: watchlist is P1), so the
- * symbol list and delta-window choice live in this browser only — see
- * lib/watchlist-storage.ts.
+ * Account-backed as of P1 (Build_plan.md §O: "watchlist... gated behind
+ * auth when introduced") — `user` comes from the server (see
+ * app/page.tsx's getSignedInUser()), and membership lives in the backend's
+ * watchlist_item table, not this browser. Signed-out visitors get a
+ * sign-in prompt instead of the table; there's nothing anonymous left to
+ * show them.
  */
-export function WatchlistPanel() {
-  const [symbols, setSymbols] = useWatchlistSymbols();
+export function WatchlistPanel({ user }: { user: AuthUser | null }) {
   const [deltaDays, setDeltaDays] = useDeltaDays();
-  const live = useLiveQuotes(symbols);
-  const [quotes, setQuotes] = useState<Record<string, WatchlistQuote>>({});
-  const [unknown, setUnknown] = useState<string[]>([]);
+  const [quotes, setQuotes] = useState<WatchlistQuote[]>([]);
   const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const importAttempted = useRef(false);
+
+  const symbols = quotes.map((q) => q.symbol);
+  const live = useLiveQuotes(symbols);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ deltas: deltaDays.join(",") });
+      const res = await fetch(`/api/watchlist?${params.toString()}`);
+      const data: { quotes: WatchlistQuote[] } = await res.json();
+      setQuotes(data.quotes ?? []);
+      return data.quotes ?? [];
+    } catch {
+      return [];
+    } finally {
+      setLoading(false);
+      setLoadedOnce(true);
+    }
+  }, [deltaDays]);
 
   useEffect(() => {
-    // Nothing to fetch, and whatever's left in `quotes`/`unknown` from a
-    // previous non-empty state is simply not rendered while the list is
-    // empty (see the symbols.length === 0 branch below) — no need to clear
-    // it, and clearing it here would be a synchronous setState in an effect
-    // body for no visible benefit.
-    if (symbols.length === 0) return;
-    let cancelled = false;
-    // Legitimate loading flag for a cancelable fetch below (guarded by
-    // `cancelled`) — not the "derive state from a prop" case the rule is
-    // meant to catch.
+    if (!user) return;
+    // Legitimate initial data load triggered by a prop becoming available
+    // (the server tells us who's signed in), not the "derive state from a
+    // prop" case the rule is meant to catch — same precedent as the
+    // pre-accounts version of this panel had for its own loading flag.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true);
-    const params = new URLSearchParams({
-      symbols: symbols.join(","),
-      deltas: deltaDays.join(","),
-    });
-    fetch(`/api/watchlist?${params.toString()}`)
-      .then((res) => res.json())
-      .then((data: { quotes: WatchlistQuote[]; unknown_symbols: string[] }) => {
-        if (cancelled) return;
-        setQuotes(Object.fromEntries(data.quotes.map((q) => [q.symbol, q])));
-        setUnknown(data.unknown_symbols);
-      })
-      .catch(() => {
-        if (!cancelled) setUnknown(symbols);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [symbols, deltaDays]);
+    void refresh();
+    // Deliberately not depending on `refresh` itself (its identity changes
+    // with deltaDays) — re-running on every `user` change only, so this
+    // stays "the initial load," while the deltaDays-only effect below
+    // handles picking up a delta-window change without re-triggering the
+    // one-shot import logic.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
-  function addSymbol(symbol: string) {
+  useEffect(() => {
+    if (!user || !loadedOnce) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deltaDays]);
+
+  // One-time import: a freshly-created account with an empty server-side
+  // list, but a browser that already has an anonymous localStorage
+  // watchlist from before accounts existed — that's real state someone
+  // built up, not something to silently drop the first time they sign in.
+  useEffect(() => {
+    if (!user || !loadedOnce || importAttempted.current) return;
+    if (quotes.length > 0) {
+      importAttempted.current = true;
+      return;
+    }
+    const localSymbols = readLocalWatchlistSymbols();
+    if (localSymbols.length === 0) {
+      importAttempted.current = true;
+      return;
+    }
+    importAttempted.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setImporting(true);
+    Promise.all(
+      localSymbols.map((symbol) =>
+        fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "POST" }).catch(() => {}),
+      ),
+    )
+      .then(() => {
+        clearLocalWatchlistSymbols();
+        return refresh();
+      })
+      .finally(() => setImporting(false));
+  }, [user, loadedOnce, quotes.length, refresh]);
+
+  async function addSymbol(symbol: string) {
     const upper = symbol.trim().toUpperCase();
     if (!upper || symbols.includes(upper)) return;
-    setSymbols([...symbols, upper]);
+    await fetch(`/api/watchlist/${encodeURIComponent(upper)}`, { method: "POST" });
+    void refresh();
   }
 
-  function removeSymbol(symbol: string) {
-    setSymbols(symbols.filter((s) => s !== symbol));
+  async function removeSymbol(symbol: string) {
+    await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" });
+    void refresh();
   }
 
-  // Three genuinely different states, and the footnote has to tell them
-  // apart: a closing price from the provider is real and current-as-of-close
-  // (not the same claim as "the feed is down"), and neither is the same as a
-  // live tick.
   const hasQuotes = Object.keys(live.bySymbol).length > 0;
   const quoteSourceNote = live.isLive
     ? "Live price from Yahoo Finance, refreshed every 15s, shown against the previous close."
     : hasQuotes
       ? "Market closed — showing today's closing price against the prior close."
       : "Live prices unavailable — showing the last stored close, labelled with its own date.";
+
+  if (!user) {
+    return (
+      <Panel title="Watchlist" bodyClassName="p-0">
+        <p className="px-3 py-8 text-center text-xs text-muted-foreground">
+          <Link href="/login" className="text-primary hover:underline">
+            Sign in
+          </Link>{" "}
+          to build a watchlist.
+        </p>
+      </Panel>
+    );
+  }
 
   return (
     <Panel
@@ -117,9 +172,13 @@ export function WatchlistPanel() {
       footnote={`${quoteSourceNote} Δ windows and ranges are end-of-day and corporate-action adjusted; 'all-time' means since this deployment started tracking each stock, not its full listed history.`}
       fullscreenable
     >
-      {symbols.length === 0 ? (
+      {importing ? (
         <p className="px-3 py-8 text-center text-xs text-muted-foreground">
-          Add a symbol above to start your watchlist.
+          Importing your previous watchlist…
+        </p>
+      ) : quotes.length === 0 ? (
+        <p className="px-3 py-8 text-center text-xs text-muted-foreground">
+          {loadedOnce ? "Add a symbol above to start your watchlist." : "Loading…"}
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -140,15 +199,13 @@ export function WatchlistPanel() {
               </tr>
             </thead>
             <tbody>
-              {symbols.map((symbol) => (
+              {quotes.map((quote) => (
                 <WatchlistRow
-                  key={symbol}
-                  symbol={symbol}
-                  quote={quotes[symbol]}
-                  liveQuote={live.bySymbol[symbol]}
-                  isUnknown={unknown.includes(symbol)}
+                  key={quote.symbol}
+                  quote={quote}
+                  liveQuote={live.bySymbol[quote.symbol]}
                   deltaDays={deltaDays}
-                  onRemove={() => removeSymbol(symbol)}
+                  onRemove={() => removeSymbol(quote.symbol)}
                 />
               ))}
             </tbody>
@@ -165,52 +222,17 @@ export function WatchlistPanel() {
 }
 
 function WatchlistRow({
-  symbol,
   quote,
   liveQuote,
-  isUnknown,
   deltaDays,
   onRemove,
 }: {
-  symbol: string;
-  quote: WatchlistQuote | undefined;
+  quote: WatchlistQuote;
   liveQuote: LiveQuote | undefined;
-  isUnknown: boolean;
   deltaDays: [number, number, number];
   onRemove: () => void;
 }) {
   const flash = usePriceFlash(liveQuote?.ltp);
-
-  if (isUnknown) {
-    return (
-      <tr className="border-b border-border/60 last:border-0">
-        <td className="px-3 py-2">
-          <span className="num font-medium text-muted-foreground">{symbol}</span>
-          <span className="ml-2 text-[11px] text-down">not found on NSE</span>
-        </td>
-        <td colSpan={4 + deltaDays.length} />
-        <td className="px-2 py-2 text-right">
-          <RemoveButton onRemove={onRemove} symbol={symbol} />
-        </td>
-      </tr>
-    );
-  }
-
-  if (!quote) {
-    return (
-      <tr className="border-b border-border/60 last:border-0">
-        <td className="px-3 py-2">
-          <span className="num font-medium">{symbol}</span>
-        </td>
-        <td colSpan={4 + deltaDays.length} className="px-2 py-2 text-muted-foreground">
-          Loading…
-        </td>
-        <td className="px-2 py-2 text-right">
-          <RemoveButton onRemove={onRemove} symbol={symbol} />
-        </td>
-      </tr>
-    );
-  }
 
   return (
     <tr className="border-b border-border/60 last:border-0 hover:bg-accent/40">
@@ -288,7 +310,7 @@ function WatchlistRow({
         )}
       </td>
       <td className="px-2 py-2 text-right">
-        <RemoveButton onRemove={onRemove} symbol={symbol} />
+        <RemoveButton onRemove={onRemove} symbol={quote.symbol} />
       </td>
     </tr>
   );
