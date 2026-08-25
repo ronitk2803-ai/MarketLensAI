@@ -16,7 +16,22 @@ import type { AuthUser } from "@/lib/api";
  * prompt) rather than each re-reading the cookie itself.
  */
 export async function getSignedInUser(): Promise<AuthUser | null> {
+  const session = await getSignedInSession();
+  return session?.user ?? null;
+}
+
+/** Same as getSignedInUser, but also hands back the raw access token —
+ * for a page that needs to make its own authenticated calls (e.g.
+ * app/theses/page.tsx fetching the caller's theses), this avoids reading
+ * the cookie a second time or asserting it's still there just because
+ * getSignedInUser resolved a user. */
+export async function getSignedInSession(): Promise<{
+  user: AuthUser;
+  accessToken: string;
+} | null> {
   const accessToken = (await cookies()).get(ACCESS_TOKEN_COOKIE)?.value;
   if (!accessToken) return null;
-  return getCurrentUser(accessToken);
+  const user = await getCurrentUser(accessToken);
+  if (!user) return null;
+  return { user, accessToken };
 }

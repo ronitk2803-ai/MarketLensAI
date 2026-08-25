@@ -1,6 +1,6 @@
 """The daily unattended ingestion job (Build_plan.md §S step 15 / §Q MVP
-scope): prices -> corporate actions -> scores, over the active equity
-universe. Not tied to any scheduler — callable directly
+scope): prices -> corporate actions -> scores -> thesis-trigger eval, over
+the active equity universe. Not tied to any scheduler — callable directly
 (`python -m app.jobs.daily_ingestion`) so it works equally as an
 APScheduler job (wired into app.main's lifespan for the in-process MVP
 default), a platform cron trigger (Render/Fly Cron Jobs), or a GitHub
@@ -15,7 +15,6 @@ Deliberately excludes:
   viewed fresh; blindly fetching news for the whole universe daily would be
   hundreds of Google News calls for stocks nobody is looking at, which
   contradicts product_principles.md's "minimize API calls."
-- Thesis-trigger evaluation: no Thesis Tracker exists yet (P1).
 
 One asset's failure (a Yahoo hiccup, a delisted ticker) is logged and
 skipped rather than aborting the whole batch — 259 other assets shouldn't
@@ -32,6 +31,7 @@ from app.db.models import Asset
 from app.services.backfill import BackfillResult, backfill_universe_from_bhavcopy
 from app.services.corporate_actions import get_or_fetch_corporate_actions
 from app.services.scoring import get_or_compute_score
+from app.services.thesis import run_thesis_eval
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,8 @@ class DailyIngestionResult:
     corporate_actions_errors: int
     scores_computed: int
     scores_errors: int
+    thesis_events_created: int
+    thesis_eval_errors: int
 
 
 def _active_equity_universe(db: Session) -> list[Asset]:
@@ -84,12 +86,23 @@ def run_daily_ingestion(db: Session, *, price_lookback_days: int = 10) -> DailyI
             logger.exception("daily_ingestion: scoring failed for %s", asset.symbol)
     db.commit()
 
+    # Runs last and deliberately not per-asset from `assets` above — a
+    # thesis can reference a delisted/inactive asset (Build_plan.md
+    # §X.1's edge cases), which `_active_equity_universe` filters out, so
+    # this queries straight off thesis_trigger instead (see
+    # run_thesis_eval's docstring).
+    thesis_eval = run_thesis_eval(db)
+    db.commit()
+    logger.info("daily_ingestion: thesis eval %s", thesis_eval)
+
     result = DailyIngestionResult(
         backfill=backfill,
         corporate_actions_processed=ca_processed,
         corporate_actions_errors=ca_errors,
         scores_computed=scores_computed,
         scores_errors=scores_errors,
+        thesis_events_created=thesis_eval.events_created,
+        thesis_eval_errors=thesis_eval.errors,
     )
     logger.info("daily_ingestion: done %s", result)
     return result

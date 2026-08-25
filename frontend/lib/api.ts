@@ -454,3 +454,118 @@ export async function getCurrentUser(accessToken: string): Promise<AuthUser | nu
     throw error;
   }
 }
+
+// Thesis Tracker (Build_plan.md §X.1) — bare JSON like auth above, not the
+// {data, meta} envelope: a thesis is user-authored content plus a computed
+// number, not market data with source/confidence to report.
+
+export type ThesisStance = "bull" | "bear" | "neutral";
+export type ThesisStatus = "active" | "challenged" | "invalidated" | "closed";
+export type ThesisOperator = "gt" | "lt" | "gte" | "lte" | "eq";
+
+export interface ThesisTrigger {
+  id: number;
+  metric: string;
+  operator: ThesisOperator;
+  threshold: number;
+  description: string | null;
+  currently_breached: boolean;
+}
+
+export interface ThesisEvent {
+  id: number;
+  trigger_id: number;
+  metric: string;
+  operator: ThesisOperator;
+  threshold: number;
+  fired_at: string;
+  observed_value: number | null;
+  note: string | null;
+}
+
+export interface ThesisSummary {
+  id: number;
+  symbol: string;
+  exchange: string;
+  asset_name: string;
+  title: string;
+  body: string;
+  stance: ThesisStance;
+  conviction: number;
+  status: ThesisStatus;
+  created_at: string;
+}
+
+export interface Thesis extends ThesisSummary {
+  triggers: ThesisTrigger[];
+}
+
+export interface ThesisDetail extends Thesis {
+  events: ThesisEvent[];
+}
+
+export interface CreateThesisPayload {
+  symbol: string;
+  title: string;
+  body: string;
+  stance: ThesisStance;
+  conviction: number;
+  triggers: {
+    metric: string;
+    operator: ThesisOperator;
+    threshold: number;
+    description?: string;
+  }[];
+}
+
+export interface UpdateThesisPayload {
+  title?: string;
+  body?: string;
+  stance?: ThesisStance;
+  conviction?: number;
+  status?: ThesisStatus;
+}
+
+/** Server Components call these directly, same reasoning as getCurrentUser
+ * above — only the mutations need a Route Handler (app/api/theses/*),
+ * since those come from Client Component forms that can't reach
+ * API_BASE_URL or read the session cookie themselves. */
+export function getTheses(accessToken: string) {
+  return apiFetchRaw<ThesisSummary[]>("/theses", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}
+
+export function getThesis(accessToken: string, id: number) {
+  return apiFetchRaw<ThesisDetail>(`/theses/${id}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}
+
+export function createThesis(accessToken: string, payload: CreateThesisPayload) {
+  return apiFetchRaw<Thesis>("/theses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+}
+
+export function updateThesis(accessToken: string, id: number, payload: UpdateThesisPayload) {
+  return apiFetchRaw<Thesis>(`/theses/${id}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+}
+
+export function deleteThesis(accessToken: string, id: number) {
+  return apiFetchRaw<{ status: string }>(`/theses/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}

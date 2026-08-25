@@ -395,3 +395,109 @@ class WatchlistItem(Base):
     added_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Thesis(Base):
+    """An investor's stated conviction on one asset, plus the conditions
+    (ThesisTrigger) that would prove it wrong — Build_plan.md §X.1, the
+    "build *or challenge* conviction" feature. `stance`/`status` are plain
+    strings validated by the API layer's Pydantic models (Literal[...]),
+    not a DB-level Enum — matching every other enum-shaped column in this
+    file (e.g. FinancialMetric.confidence).
+
+    `status` has four states, reconciling an inconsistency between two
+    bullets in the spec itself (Outputs says active/challenged/invalidated,
+    Data says active/invalidated/closed) by taking the union: "active" (no
+    trigger has fired yet), "challenged" (one has — set once, automatically,
+    by the eval job; never reverts), "invalidated"/"closed" (user-set only,
+    via PUT, meaning the eval job stops evaluating this thesis's triggers).
+    """
+
+    __tablename__ = "thesis"
+    __table_args__ = (Index("ix_thesis_status", "status"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id"), index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), index=True)
+    title: Mapped[str]
+    body: Mapped[str]
+    stance: Mapped[str]  # "bull" | "bear" | "neutral"
+    conviction: Mapped[int]  # 1-5, enforced by the API layer's Pydantic model
+    status: Mapped[str] = mapped_column(default="active")
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    asset: Mapped["Asset"] = relationship()
+    triggers: Mapped[list["ThesisTrigger"]] = relationship(
+        back_populates="thesis", cascade="all, delete-orphan"
+    )
+
+
+class ThesisTrigger(Base):
+    """One invalidation condition (`metric operator threshold`, e.g.
+    debt_to_equity > 1.5) — see app/services/thesis_metrics.py for the
+    registry of resolvable `metric` keys and app/engines/thesis/base.py
+    for how `operator`/`threshold` get evaluated against an observed value.
+
+    Immutable once created — deliberately no update path. The spec's own
+    API list (Build_plan.md §X.1) never mentions a trigger-editing
+    endpoint, and this codebase never sets `ondelete=` on any FK (a
+    delete-and-recreate "edit" would either hard-fail once a trigger has
+    ever fired, since ThesisEvent.trigger_id references it, or — if
+    cascade were added for that case — silently destroy the append-only
+    event history the feature exists to preserve). A thesis's triggers
+    only ever disappear together, by deleting the whole thesis.
+
+    Dropped the spec's `direction` column: `operator` (gt/lt/gte/lte/eq)
+    already fully determines evaluation semantics, and nothing in the spec
+    text assigns `direction` independent meaning beyond that.
+
+    `currently_breached` isn't in the spec's schema line either, but is
+    necessary: without it, a trigger that stays breached for months would
+    write a new ThesisEvent on every single daily eval, burying the one
+    moment that actually mattered (when it first broke). The eval job only
+    writes an event on the false -> true transition.
+    """
+
+    __tablename__ = "thesis_trigger"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thesis_id: Mapped[int] = mapped_column(
+        ForeignKey("thesis.id", ondelete="CASCADE"), index=True
+    )
+    metric: Mapped[str]
+    operator: Mapped[str]  # "gt" | "lt" | "gte" | "lte" | "eq"
+    threshold: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    description: Mapped[str | None]
+    currently_breached: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    thesis: Mapped["Thesis"] = relationship(back_populates="triggers")
+
+
+class ThesisEvent(Base):
+    """Append-only log of when a trigger fired (a false -> true breach
+    transition — see ThesisTrigger.currently_breached), with the value
+    observed at that moment. This is the historical record the whole
+    feature is for, so nothing here is ever updated or deleted except as
+    part of deleting the entire parent thesis (both FKs cascade)."""
+
+    __tablename__ = "thesis_event"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thesis_id: Mapped[int] = mapped_column(
+        ForeignKey("thesis.id", ondelete="CASCADE"), index=True
+    )
+    trigger_id: Mapped[int] = mapped_column(
+        ForeignKey("thesis_trigger.id", ondelete="CASCADE"), index=True
+    )
+    fired_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    observed_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    note: Mapped[str | None]
+
+    trigger: Mapped["ThesisTrigger"] = relationship()
