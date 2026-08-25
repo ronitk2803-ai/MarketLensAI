@@ -501,3 +501,56 @@ class ThesisEvent(Base):
     note: Mapped[str | None]
 
     trigger: Mapped["ThesisTrigger"] = relationship()
+
+
+class Holding(Base):
+    """A user's current position in one asset — deliberately a single flat
+    (user, asset) table, not the `portfolio` + `holding` pair Build_plan.md
+    §C sketches, for the same reason WatchlistItem already collapsed that
+    same shape: nothing asks for multiple named portfolios per user.
+
+    Only `quantity`/`avg_cost` are stored — current price, market value,
+    and P&L are computed live on every read (app/services/portfolio.py),
+    the same "recompute from stored EOD data on every request, never cache
+    a number that can go stale" discipline watchlist.py already applies to
+    quotes.
+
+    `quantity` is Numeric rather than an integer count: NSE equity
+    positions are whole shares in practice, but this app's instrument
+    layer is deliberately market-agnostic (US/MF/ETF/crypto per §C) and
+    corporate-action-driven fractional entitlements are real, so an
+    integer would be a constraint with no corresponding benefit.
+
+    `source` exists so a CSV import can't silently destroy a hand-entered
+    holding (e.g. a position at a different broker Zerodha's export knows
+    nothing about) — import only replaces rows it previously created
+    itself (app/services/portfolio.py's import_holdings_csv). A manual
+    holding for an asset that's also in a freshly imported file gets taken
+    over (flipped to "csv"): the unique(user_id, asset_id) constraint
+    means there can only ever be one row per asset regardless of origin,
+    and the broker export is the more authoritative source for what's
+    actually held.
+
+    `unique(user_id, asset_id)`: a user holds at most one position per
+    asset. Unlike WatchlistItem, adding an already-held symbol again is
+    NOT a no-op — it's how a position change (or a re-import) is
+    recorded, so this constraint backstops upsert-in-place, not
+    idempotent no-op-add."""
+
+    __tablename__ = "holding"
+    __table_args__ = (UniqueConstraint("user_id", "asset_id", name="uq_holding_user_asset"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id"), index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id"), index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    avg_cost: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    source: Mapped[str] = mapped_column(default="manual")  # "manual" | "csv"
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    asset: Mapped["Asset"] = relationship()

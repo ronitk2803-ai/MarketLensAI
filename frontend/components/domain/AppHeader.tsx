@@ -25,6 +25,7 @@ export async function AppHeader() {
         <nav className="flex items-center gap-1">
           <NavLink href="/">Markets</NavLink>
           <NavLink href="/opportunities">Screener</NavLink>
+          <NavLink href="/portfolio">Portfolio</NavLink>
           <NavLink href="/theses">Theses</NavLink>
         </nav>
 

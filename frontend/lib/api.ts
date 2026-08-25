@@ -569,3 +569,108 @@ export function deleteThesis(accessToken: string, id: number) {
     cache: "no-store",
   });
 }
+
+// Portfolio (Build_plan.md P1, Zerodha CSV import) — bare JSON like Thesis
+// above: a holding is user-authored quantity/avg_cost plus a computed P&L,
+// not market data with source/confidence to report.
+
+export interface PortfolioHolding {
+  id: number;
+  symbol: string;
+  exchange: string;
+  asset_name: string;
+  quantity: number;
+  avg_cost: number;
+  source: "manual" | "csv";
+  last_price: number | null;
+  as_of: string | null;
+  market_value: number | null;
+  cost_basis: number;
+  unrealized_pnl: number | null;
+  unrealized_pnl_pct: number | null;
+}
+
+export interface PortfolioTotals {
+  cost_basis: number;
+  market_value: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pnl_pct: number | null;
+  holdings_priced: number;
+  holdings_total: number;
+}
+
+export interface Portfolio {
+  holdings: PortfolioHolding[];
+  totals: PortfolioTotals;
+}
+
+export interface AddHoldingPayload {
+  symbol: string;
+  quantity: number;
+  avg_cost: number;
+}
+
+export interface UpdateHoldingPayload {
+  quantity?: number;
+  avg_cost?: number;
+}
+
+export interface PortfolioImportRowResult {
+  row_number: number;
+  symbol: string;
+  status: "imported" | "skipped";
+  reason: string | null;
+}
+
+export interface PortfolioImportSummary {
+  imported: number;
+  skipped: number;
+  rows: PortfolioImportRowResult[];
+}
+
+/** Server Components call this directly, same as getTheses. */
+export function getPortfolio(accessToken: string) {
+  return apiFetchRaw<Portfolio>("/portfolio", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}
+
+export function addHolding(accessToken: string, payload: AddHoldingPayload) {
+  return apiFetchRaw<PortfolioHolding>("/portfolio", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+}
+
+export function updateHolding(accessToken: string, id: number, payload: UpdateHoldingPayload) {
+  return apiFetchRaw<PortfolioHolding>(`/portfolio/${id}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+}
+
+export function deleteHolding(accessToken: string, id: number) {
+  return apiFetchRaw<{ status: string }>(`/portfolio/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}
+
+/** `formData` is forwarded as-is from the Route Handler that received it
+ * from the browser — apiFetchRaw doesn't force a Content-Type, so `fetch`
+ * sets the correct multipart boundary itself. Don't set Content-Type
+ * manually here; it would omit the boundary parameter and break parsing. */
+export function importPortfolioCsv(accessToken: string, formData: FormData) {
+  return apiFetchRaw<PortfolioImportSummary>("/portfolio/import", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: formData,
+    cache: "no-store",
+  });
+}
