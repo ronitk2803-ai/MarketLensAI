@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { Delta } from "@/components/terminal/Delta";
 import { Panel } from "@/components/terminal/Panel";
-import { getOpportunities, getOpportunityScreens } from "@/lib/api";
+import { getOpportunities, getOpportunityIndustries, getOpportunityScreens } from "@/lib/api";
 import { compact, num, price, scoreBarTone, scoreTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -42,15 +42,22 @@ function MetricCell({ metricKey, value }: { metricKey: string; value: number | u
 export default async function OpportunitiesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ screen?: string }>;
+  searchParams: Promise<{ screen?: string; industry?: string }>;
 }) {
-  const screensResult = await getOpportunityScreens();
+  const [screensResult, industriesResult, params] = await Promise.all([
+    getOpportunityScreens(),
+    getOpportunityIndustries(),
+    searchParams,
+  ]);
   const screens = screensResult.data;
-  const { screen: rawScreen } = await searchParams;
+  const industries = industriesResult.data;
+  const { screen: rawScreen, industry: rawIndustry } = params;
   const activeScreen =
     rawScreen && screens.some((s) => s.id === rawScreen) ? rawScreen : (screens[0]?.id ?? "");
+  const activeIndustry =
+    rawIndustry && industries.some((i) => i.code === rawIndustry) ? rawIndustry : undefined;
 
-  const result = activeScreen ? await getOpportunities(activeScreen) : null;
+  const result = activeScreen ? await getOpportunities(activeScreen, activeIndustry) : null;
   const hits = result?.data ?? [];
 
   // Union across all hits, not just hits[0] — a screen whose first row
@@ -82,7 +89,7 @@ export default async function OpportunitiesPage({
         {screens.map((s) => (
           <Link
             key={s.id}
-            href={`/opportunities?screen=${s.id}`}
+            href={`/opportunities?screen=${s.id}${activeIndustry ? `&industry=${encodeURIComponent(activeIndustry)}` : ""}`}
             className={cn(
               "rounded-sm border px-2.5 py-1 text-xs transition-colors",
               s.id === activeScreen
@@ -94,6 +101,37 @@ export default async function OpportunitiesPage({
           </Link>
         ))}
       </div>
+
+      {industries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="label-caps mr-1 text-muted-foreground">Industry</span>
+          <Link
+            href={`/opportunities?screen=${activeScreen}`}
+            className={cn(
+              "rounded-sm border px-2.5 py-1 text-xs transition-colors",
+              !activeIndustry
+                ? "border-primary bg-primary/15 font-medium text-foreground"
+                : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+            )}
+          >
+            All
+          </Link>
+          {industries.map((i) => (
+            <Link
+              key={i.code}
+              href={`/opportunities?screen=${activeScreen}&industry=${encodeURIComponent(i.code)}`}
+              className={cn(
+                "rounded-sm border px-2.5 py-1 text-xs transition-colors",
+                i.code === activeIndustry
+                  ? "border-primary bg-primary/15 font-medium text-foreground"
+                  : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+              )}
+            >
+              {i.name}
+            </Link>
+          ))}
+        </div>
+      )}
 
       <Panel
         title={

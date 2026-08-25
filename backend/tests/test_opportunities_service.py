@@ -4,8 +4,9 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, CorporateAction, PriceOHLCV
+from app.db.models import Asset, Company, CorporateAction, Industry, PriceOHLCV
 from app.services.opportunities import (
+    list_industries,
     run_ranked_screen,
     run_ranked_screen_with_sparklines,
     run_screen,
@@ -247,3 +248,78 @@ def test_sparklines_use_corporate_action_adjusted_closes(db: Session) -> None:
     assert spark[0] == 100.0
     assert spark[-1] == 70.0
     assert max(spark) == 100.0
+
+
+def _seed_industry(db: Session, code: str, name: str) -> Industry:
+    industry = Industry(code=code, name=name)
+    db.add(industry)
+    db.flush()
+    return industry
+
+
+def _attach_industry(db: Session, asset: Asset, industry: Industry) -> None:
+    db.add(Company(asset_id=asset.id, industry_id=industry.id))
+    db.flush()
+
+
+def test_run_ranked_screen_with_sparklines_filters_by_industry(db: Session) -> None:
+    banking = _seed_industry(db, "ZZBANK", "Test Banking")
+    pharma = _seed_industry(db, "ZZPHARMA", "Test Pharma")
+
+    bank_stock = Asset(symbol="ZZIND1", exchange="NSE", market="IN", name="Bank Co")
+    pharma_stock = Asset(symbol="ZZIND2", exchange="NSE", market="IN", name="Pharma Co")
+    db.add_all([bank_stock, pharma_stock])
+    db.flush()
+    _attach_industry(db, bank_stock, banking)
+    _attach_industry(db, pharma_stock, pharma)
+    _add_bars(db, bank_stock, [100.0] * 10 + [70.0])
+    _add_bars(db, pharma_stock, [100.0] * 10 + [70.0])
+
+    result = run_ranked_screen_with_sparklines(db, "down_10d", industry="ZZBANK")
+
+    symbols = {r.hit.asset.symbol for r in result.ranked}
+    assert symbols == {"ZZIND1"}
+    assert result.industries["ZZIND1"] == ("ZZBANK", "Test Banking")
+
+
+def test_run_ranked_screen_with_sparklines_industry_none_returns_everything(db: Session) -> None:
+    """No `industry` filter given -> behaves exactly like before this
+    parameter existed, just with the `industries` lookup also populated."""
+    industry = _seed_industry(db, "ZZAUTO", "Test Auto")
+    asset = Asset(symbol="ZZIND3", exchange="NSE", market="IN", name="Auto Co")
+    db.add(asset)
+    db.flush()
+    _attach_industry(db, asset, industry)
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    result = run_ranked_screen_with_sparklines(db, "down_10d")
+
+    assert "ZZIND3" in {r.hit.asset.symbol for r in result.ranked}
+    assert result.industries["ZZIND3"] == ("ZZAUTO", "Test Auto")
+
+
+def test_run_ranked_screen_with_sparklines_unknown_industry_filters_to_nothing(
+    db: Session,
+) -> None:
+    industry = _seed_industry(db, "ZZFIN", "Test Financials")
+    asset = Asset(symbol="ZZIND4", exchange="NSE", market="IN", name="Fin Co")
+    db.add(asset)
+    db.flush()
+    _attach_industry(db, asset, industry)
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    result = run_ranked_screen_with_sparklines(db, "down_10d", industry="ZZNOPE")
+
+    assert result.ranked == []
+
+
+def test_list_industries_returns_every_seeded_industry_alphabetically(db: Session) -> None:
+    _seed_industry(db, "ZZZLAST", "Zzz Last")
+    _seed_industry(db, "ZZZFIRST", "Aaa First")
+
+    industries = list_industries(db)
+
+    names = [name for _code, name in industries]
+    assert "Aaa First" in names
+    assert "Zzz Last" in names
+    assert names.index("Aaa First") < names.index("Zzz Last")

@@ -141,9 +141,19 @@ export interface IncomeStatementPeriod {
   line_items: Record<string, number>;
 }
 
+export interface SectorPe {
+  trailing_pe: number | null;
+  trailing_pe_source: "nse_index" | "peer_median" | null;
+  trailing_pe_index_name: string | null;
+  trailing_pe_sample_size: number;
+  forward_median: number | null;
+  forward_sample_size: number;
+}
+
 export interface Fundamentals {
   ratios: RatioValue[];
   income_statement: IncomeStatementPeriod[];
+  sector_pe: SectorPe;
 }
 
 export function getFundamentals(symbol: string) {
@@ -176,6 +186,17 @@ export function getOpportunityScreens() {
   });
 }
 
+export interface OpportunityIndustry {
+  code: string;
+  name: string;
+}
+
+export function getOpportunityIndustries() {
+  return apiFetch<OpportunityIndustry[]>("/opportunities/industries", {
+    next: { revalidate: 3600 },
+  });
+}
+
 export interface OpportunityHit {
   symbol: string;
   exchange: string;
@@ -186,10 +207,13 @@ export interface OpportunityHit {
   opportunity_score: number | null;
   /** Trailing ~30 sessions of corporate-action-adjusted closes, oldest first. */
   spark: number[];
+  industry: string | null;
 }
 
-export function getOpportunities(screen: string) {
-  return apiFetch<OpportunityHit[]>(`/opportunities?screen=${encodeURIComponent(screen)}`, {
+export function getOpportunities(screen: string, industry?: string) {
+  const params = new URLSearchParams({ screen });
+  if (industry) params.set("industry", industry);
+  return apiFetch<OpportunityHit[]>(`/opportunities?${params.toString()}`, {
     next: { revalidate: 900 },
   });
 }
@@ -201,11 +225,24 @@ export interface ScoreComponent {
   contribution: number | null;
 }
 
+export interface ScoreInputs {
+  rsi14: number | null;
+  drawdown_pct: number | null;
+  debt_to_equity: number | null;
+  gross_margins: number | null;
+  revenue_growth: number | null;
+  earnings_growth: number | null;
+  price_to_book: number | null;
+  relative_volume: number | null;
+  delivery_pct: number | null;
+}
+
 export interface Score {
   value: number | null;
   coverage: number;
   as_of: string;
   components: ScoreComponent[];
+  inputs: ScoreInputs;
 }
 
 export function getScore(symbol: string) {

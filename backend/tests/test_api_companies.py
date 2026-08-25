@@ -1,16 +1,18 @@
 import datetime as dt
 from collections.abc import Iterator
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, Company, Industry
+from app.db.models import Asset, Company, FinancialMetric, Industry
 from app.db.session import get_db
 from app.domain.models import AssetRef, Bar, Ratios
 from app.main import app
 from app.providers.india.google_news import GoogleNewsProvider
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
+from app.providers.india.nse_sector_pe import IndexPeRow
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
 
@@ -225,6 +227,125 @@ def test_get_fundamentals_404_for_unknown_symbol() -> None:
     assert response.status_code == 404
 
 
+def test_get_fundamentals_sector_pe_absent_when_not_enough_peer_data(
+    seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`seeded_asset`'s industry ("ZZIND1") has no official Nifty sectoral
+    index mapping (it's a test fixture, not a real NSE industry code) and
+    no other company in it has a stored P/E yet — the honest answer is
+    "not enough data," never a one-company "median"."""
+    monkeypatch.setattr(
+        YFinanceFundamentalDataProvider,
+        "get_ratios",
+        lambda *a, **k: Ratios(
+            asset=AssetRef(symbol="ZZAPI1", exchange="NSE"),
+            as_of=dt.date.today(),
+            values={"trailingPE": 15.0},
+        ),
+    )
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_all_statements", lambda *a, **k: [])
+
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/fundamentals")
+
+    assert response.status_code == 200
+    sector_pe = response.json()["data"]["sector_pe"]
+    assert sector_pe == {
+        "trailing_pe": None,
+        "trailing_pe_source": None,
+        "trailing_pe_index_name": None,
+        "trailing_pe_sample_size": 0,
+        "forward_median": None,
+        "forward_sample_size": 0,
+    }
+
+
+def test_get_fundamentals_sector_pe_falls_back_to_peer_median_once_peers_have_data(
+    seeded_asset: Asset, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    industry_id = seeded_asset.company.industry_id
+    for i, pe in enumerate([10.0, 30.0]):
+        peer = Asset(symbol=f"ZZPEER{i}", exchange="NSE", market="IN", name=f"Peer {i}")
+        db.add(peer)
+        db.flush()
+        db.add(Company(asset_id=peer.id, industry_id=industry_id))
+        db.add(
+            FinancialMetric(
+                asset_id=peer.id,
+                metric="trailingPE",
+                value=Decimal(str(pe)),
+                source="yfinance_fundamentals",
+                confidence="low",
+            )
+        )
+    db.flush()
+
+    monkeypatch.setattr(
+        YFinanceFundamentalDataProvider,
+        "get_ratios",
+        lambda *a, **k: Ratios(
+            asset=AssetRef(symbol="ZZAPI1", exchange="NSE"),
+            as_of=dt.date.today(),
+            values={"trailingPE": 20.0},
+        ),
+    )
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_all_statements", lambda *a, **k: [])
+
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/fundamentals")
+
+    assert response.status_code == 200
+    sector_pe = response.json()["data"]["sector_pe"]
+    # Peers (10, 30) plus this company itself (20) -> median of 20.
+    assert sector_pe["trailing_pe"] == 20.0
+    assert sector_pe["trailing_pe_source"] == "peer_median"
+    assert sector_pe["trailing_pe_index_name"] is None
+    assert sector_pe["trailing_pe_sample_size"] == 3
+    assert sector_pe["forward_median"] is None
+
+
+def test_get_fundamentals_sector_pe_prefers_nse_index_over_peer_median(
+    seeded_asset: Asset, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When this industry does have an official Nifty sectoral index, that
+    figure wins even if peer data also exists — it's the more authoritative
+    source (computed by NSE across the whole index, not a handful of
+    companies this app happens to have cached)."""
+    # Give the fixture's industry a real, mapped code instead of the fake
+    # "ZZIND1" the fixture seeds it with.
+    seeded_asset.company.industry.code = "financial-services"
+    db.flush()
+
+    monkeypatch.setattr(
+        "app.services.sector_index.fetch_latest_index_pe",
+        lambda **k: [
+            IndexPeRow(
+                index_name="Nifty Financial Services",
+                pe=16.04,
+                pb=2.43,
+                div_yield=0.94,
+                index_date=dt.date(2026, 8, 24),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        YFinanceFundamentalDataProvider,
+        "get_ratios",
+        lambda *a, **k: Ratios(
+            asset=AssetRef(symbol="ZZAPI1", exchange="NSE"),
+            as_of=dt.date.today(),
+            values={"trailingPE": 20.0},
+        ),
+    )
+    monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_all_statements", lambda *a, **k: [])
+
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/fundamentals")
+
+    assert response.status_code == 200
+    sector_pe = response.json()["data"]["sector_pe"]
+    assert sector_pe["trailing_pe"] == 16.04
+    assert sector_pe["trailing_pe_source"] == "nse_index"
+    assert sector_pe["trailing_pe_index_name"] == "Nifty Financial Services"
+
+
 def test_get_news_returns_articles(seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.domain.models import Article
 
@@ -271,6 +392,19 @@ def test_get_score_returns_value_and_components(seeded_asset: Asset) -> None:
     assert 0 <= body["data"]["value"] <= 100
     assert len(body["data"]["components"]) == 5
     assert body["meta"]["source"] == "mlai_scoring_v1"
+    # The raw inputs each component is built from — what the frontend's
+    # score explainer reads to show "why" a component landed where it did.
+    assert set(body["data"]["inputs"]) == {
+        "rsi14",
+        "drawdown_pct",
+        "debt_to_equity",
+        "gross_margins",
+        "revenue_growth",
+        "earnings_growth",
+        "price_to_book",
+        "relative_volume",
+        "delivery_pct",
+    }
 
 
 def test_get_score_404_for_unknown_symbol() -> None:

@@ -14,9 +14,9 @@
  */
 export const KPI_GLOSSARY: Record<string, string> = {
   trailingPE:
-    "Price ÷ earnings per share over the last 12 months. How many years of current profit it'd take to earn back the share price, all else equal. Higher usually means the market expects faster growth (or the stock is expensive); compare within the same industry, not across very different businesses.",
+    "Price ÷ earnings per share over the last 12 months. How many years of current profit it'd take to earn back the share price, all else equal. Higher usually means the market expects faster growth (or the stock is expensive); compare within the same industry, not across very different businesses. The line below it is exactly that comparison — a named index (e.g. \"Nifty Financial Services 16.04\") is NSE's own official sector P/E, computed across that index's full constituent list, the most reliable figure available. \"Sector median (n=...)\" is this app's own fallback for the couple of industries with no matching Nifty sectoral index — a median across other same-industry companies it has data for (loss-making companies excluded, since a negative P/E isn't a valuation multiple in the same sense), hidden below a minimum sample since two companies isn't really a sector figure yet.",
   forwardPE:
-    "Same idea as trailing P/E, but using analysts' estimated earnings for the year ahead instead of the last 12 months. A forward P/E much lower than the trailing one implies the market expects earnings to grow — and is only as reliable as the estimate it's built on.",
+    "Same idea as trailing P/E, but using analysts' estimated earnings for the year ahead instead of the last 12 months. A forward P/E much lower than the trailing one implies the market expects earnings to grow — and is only as reliable as the estimate it's built on. NSE doesn't publish a forward-looking sector P/E, so the comparison below it is always this app's own peer median, same rule as trailing P/E's fallback.",
   priceToBook:
     "Price ÷ book value (net assets) per share. Below 1 means the stock trades for less than its accounting net worth — sometimes a bargain, sometimes a sign the market doubts those assets are worth what the books say. More meaningful for asset-heavy businesses (banks, industrials) than for asset-light ones (software).",
   debtToEquity:
@@ -52,6 +52,21 @@ export const KPI_GLOSSARY: Record<string, string> = {
   macd: "Moving Average Convergence/Divergence: the gap between a fast and a slow moving average of price, used to read momentum and potential trend shifts. The histogram is that line's own distance from its signal line — positive and growing suggests strengthening momentum, negative and growing suggests weakening.",
   volatility: "Annualized standard deviation of daily returns — how much the price has been swinging, scaled to a yearly figure so it's comparable across stocks. Higher means bigger, more frequent price swings in either direction; it says nothing about direction, only about the size of the moves.",
   drawdown: "How far the current price sits below its most recent peak, in percent. A running measure of \"how much would you have lost if you bought at the top and held,\" not a prediction of further downside.",
+
+  // Opportunity Score components — each blends 1-2 raw inputs (shown below
+  // the bar) into a 0-100 normalized value, then the five are weighted
+  // together. "Why did this land here" should always be answerable by
+  // reading the raw numbers underneath, not by trusting the bar alone.
+  valuation:
+    "How cheap or expensive the stock looks against its own accounting net worth, using price-to-book. A lower P/B scores higher here — it says nothing about whether that cheapness is deserved (a low P/B can mean bargain, or it can mean the market doubts the assets are worth what the books say).",
+  fundamental_quality:
+    "Balance-sheet and margin health: less debt relative to equity, and higher gross margins, both score higher. A read on how financially sound and efficiently the business runs, independent of what the stock currently costs.",
+  growth:
+    "How fast revenue and earnings have been growing year over year. Faster growth scores higher — but growth alone doesn't say whether it's profitable growth (pair with fundamental quality) or already priced in (pair with valuation).",
+  technical_setup:
+    "Where the price sits relative to its own recent trading range: a deeper drawdown from the recent peak combined with a lower (more \"oversold\") RSI scores higher here — this component rewards a beaten-down setup, not a strong one. It reads the chart, not the business.",
+  participation:
+    "How much trading interest the stock has seen lately: volume relative to its own 20-day average, and the share of that volume settled as actual delivery (not intraday trading). Higher scores mean more — and more \"real\" — market interest, not a judgment on where the price goes next.",
 };
 
 export function kpiDescription(metric: string): string | undefined {

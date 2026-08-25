@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, PriceOHLCV, Score
+from app.db.models import Asset, Company, Industry, PriceOHLCV, Score
 from app.domain.models import AssetRef, Bar
 from app.engines.adjustment import adjust_bars
 from app.engines.opportunity.base import Hit
@@ -151,6 +151,32 @@ def run_ranked_screen(
     return apply_attention_ranking(hits, scores)
 
 
+def _load_industries(db: Session, assets: set[AssetRef]) -> dict[str, tuple[str, str]]:
+    """symbol -> (industry code, industry name) for whichever hits actually
+    need it — same "look up only what the caller has" shape as
+    `_load_stored_scores`, and the same reason: this app's Nifty 500
+    universe is NSE-only, so keying by plain symbol (not exchange:symbol)
+    is enough here, unlike Score which can differ by exchange."""
+    if not assets:
+        return {}
+    symbols = {a.symbol for a in assets}
+    rows = (
+        db.query(Asset.symbol, Industry.code, Industry.name)
+        .join(Company, Company.asset_id == Asset.id)
+        .join(Industry, Industry.id == Company.industry_id)
+        .filter(Asset.symbol.in_(symbols))
+        .all()
+    )
+    return {symbol: (code, name) for symbol, code, name in rows}
+
+
+def list_industries(db: Session) -> list[tuple[str, str]]:
+    """(code, name) for every industry in the taxonomy, alphabetical by
+    name — the options for the homepage's industry filter."""
+    rows = db.query(Industry.code, Industry.name).order_by(Industry.name).all()
+    return [(code, name) for code, name in rows]
+
+
 @dataclass(frozen=True, slots=True)
 class ScreenOutput:
     ranked: list[RankedHit]
@@ -158,10 +184,14 @@ class ScreenOutput:
     # because they come from the same bars the screen ran on: an unadjusted
     # split would draw a cliff that never happened.
     sparklines: dict[str, list[float]]
+    # symbol -> (industry code, industry name), for whichever hits survived
+    # any `industry` filter — lets the API attach industry to each row
+    # without a second round-trip.
+    industries: dict[str, tuple[str, str]]
 
 
 def run_ranked_screen_with_sparklines(
-    db: Session, screen_id: str, *, sessions: int = SPARKLINE_SESSIONS
+    db: Session, screen_id: str, *, sessions: int = SPARKLINE_SESSIONS, industry: str | None = None
 ) -> ScreenOutput:
     """`run_ranked_screen` plus a short closing series per hit.
 
@@ -169,10 +199,18 @@ def run_ranked_screen_with_sparklines(
     draw the same length of sparkline — down_5d only needs 6 sessions to
     evaluate, which would otherwise render a 6-point stub next to
     below_dma200's full month.
+
+    `industry`, when given, filters to hits in that industry code *before*
+    sparklines are built, so a filtered request doesn't pay to adjust bars
+    for rows it's about to throw away.
     """
     hits, universe = _evaluate(db, screen_id, min_bars=sessions)
     scores = _load_stored_scores(db, {h.asset for h in hits})
     ranked = apply_attention_ranking(hits, scores)
+
+    industries = _load_industries(db, {h.asset for h in hits})
+    if industry is not None:
+        ranked = [r for r in ranked if industries.get(r.hit.asset.symbol, ("", ""))[0] == industry]
 
     bars_by_symbol = {ref.symbol: bars for ref, bars in universe.items()}
     sparklines = {
@@ -181,4 +219,4 @@ def run_ranked_screen_with_sparklines(
         ]
         for r in ranked
     }
-    return ScreenOutput(ranked=ranked, sparklines=sparklines)
+    return ScreenOutput(ranked=ranked, sparklines=sparklines, industries=industries)

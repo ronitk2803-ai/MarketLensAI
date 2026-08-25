@@ -152,7 +152,11 @@ export default async function CompanyPage({
       <AiSummaryPanel symbol={header.symbol} initial={aiSummary.data} />
 
       <div className="grid gap-3 xl:grid-cols-[1fr_420px]">
-        <FundamentalsPanel fundamentals={fundamentals.data} meta={fundamentals.meta} />
+        <FundamentalsPanel
+          fundamentals={fundamentals.data}
+          meta={fundamentals.meta}
+          industry={header.industry}
+        />
         <NewsPanel articles={news.data} meta={news.meta} />
       </div>
     </main>

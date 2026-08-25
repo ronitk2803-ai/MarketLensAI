@@ -9,13 +9,15 @@ than the source actually earns.
 """
 
 import datetime as dt
+import statistics
+from dataclasses import dataclass
 from decimal import Decimal
 
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, FinancialMetric, FinancialStatement
+from app.db.models import Asset, Company, FinancialMetric, FinancialStatement
 from app.domain.models import AssetRef
 from app.providers.errors import ProviderError
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
@@ -161,3 +163,44 @@ def get_or_fetch_statements(
         .order_by(FinancialStatement.period_end.desc())
         .all()
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SectorRatioStats:
+    median: float
+    sample_size: int
+
+
+# Below this, a "median" is really just whatever happened to be cached —
+# ratios are only ever fetched lazily, for whichever company someone has
+# actually opened a page for (get_or_fetch_ratios above), so most
+# industries start with very few companies covered. Better to say "not
+# enough data yet" than dress up a two-company average as a sector figure.
+MIN_SECTOR_SAMPLE = 3
+
+
+def get_sector_ratio_stats(db: Session, industry_id: int, metric: str) -> SectorRatioStats | None:
+    """Median `metric` (e.g. "trailingPE") across every company in the same
+    industry with a stored positive value for it.
+
+    Median, not mean: P/E in particular is heavily skewed by a handful of
+    extreme multiples, and a median is far less sensitive to that than an
+    average would be. Positive-only: a negative P/E (a loss-making company)
+    isn't a valuation multiple in the sense the comparison cares about —
+    folding it in would drag the "typical" figure toward a number that
+    doesn't mean what P/E is supposed to mean.
+    """
+    rows = (
+        db.query(FinancialMetric.value)
+        .join(Company, Company.asset_id == FinancialMetric.asset_id)
+        .filter(
+            Company.industry_id == industry_id,
+            FinancialMetric.metric == metric,
+            FinancialMetric.value > 0,
+        )
+        .all()
+    )
+    values = [float(v) for (v,) in rows]
+    if len(values) < MIN_SECTOR_SAMPLE:
+        return None
+    return SectorRatioStats(median=statistics.median(values), sample_size=len(values))

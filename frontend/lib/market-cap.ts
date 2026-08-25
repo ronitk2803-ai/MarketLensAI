@@ -12,12 +12,20 @@
  * commonly-used fixed-rupee-threshold approximation (the same shorthand
  * most retail research tools show) — good enough to orient at a glance,
  * not a claim of the regulatory ranking. Say so wherever this shows up.
+ *
+ * The thresholds are a moving target — AMFI republishes the actual
+ * rank-100 / rank-250 cutoffs twice a year as the market grows, so a fixed
+ * number here drifts stale over time. The ₹20,000 Cr / ₹5,000 Cr cutoffs
+ * this replaced were years out of date and misclassified names like LIC
+ * Housing Finance (~₹27,000 Cr) as "Large Cap" (reported live 2026-08-25).
+ * Set roughly to AMFI's most recently observed real cutoffs at time of
+ * writing — revisit periodically rather than trusting these indefinitely.
  */
 
 export type MarketCapCategory = "Large Cap" | "Mid Cap" | "Small Cap";
 
-const LARGE_CAP_MIN_CRORES = 20_000;
-const MID_CAP_MIN_CRORES = 5_000;
+const LARGE_CAP_MIN_CRORES = 85_000;
+const MID_CAP_MIN_CRORES = 25_000;
 
 export function marketCapCategory(marketCapRupees: number | null | undefined): MarketCapCategory | null {
   if (marketCapRupees == null) return null;

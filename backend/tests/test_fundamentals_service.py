@@ -4,11 +4,17 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, FinancialMetric, FinancialStatement
+from app.db.models import Asset, Company, FinancialMetric, FinancialStatement, Industry
 from app.domain.models import AssetRef, Ratios, Statements
 from app.providers.errors import ProviderError
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
-from app.services.fundamentals import FUNDAMENTALS_TTL, get_or_fetch_ratios, get_or_fetch_statements
+from app.services.fundamentals import (
+    FUNDAMENTALS_TTL,
+    MIN_SECTOR_SAMPLE,
+    get_or_fetch_ratios,
+    get_or_fetch_statements,
+    get_sector_ratio_stats,
+)
 
 
 def _make_asset(db: Session, symbol: str = "ZZFUND1") -> Asset:
@@ -331,3 +337,77 @@ def test_a_concurrent_writer_between_cache_check_and_write_does_not_500(
         db.query(FinancialMetric).filter_by(asset_id=asset_id).delete()
         db.query(Asset).filter_by(id=asset_id).delete()
         db.commit()
+
+
+def _seed_company_with_pe(db: Session, symbol: str, industry: Industry, trailing_pe: float) -> None:
+    asset = Asset(symbol=symbol, exchange="NSE", market="IN", name=symbol)
+    db.add(asset)
+    db.flush()
+    db.add(Company(asset_id=asset.id, industry_id=industry.id))
+    db.add(
+        FinancialMetric(
+            asset_id=asset.id,
+            metric="trailingPE",
+            value=Decimal(str(trailing_pe)),
+            source="yfinance_fundamentals",
+            confidence="low",
+        )
+    )
+    db.flush()
+
+
+def test_get_sector_ratio_stats_returns_none_below_minimum_sample(db: Session) -> None:
+    industry = Industry(code="ZZSECTOR1", name="Test Sector 1")
+    db.add(industry)
+    db.flush()
+    assert MIN_SECTOR_SAMPLE >= 2  # otherwise this seed no longer exercises the "too few" case
+    for i in range(MIN_SECTOR_SAMPLE - 1):
+        _seed_company_with_pe(db, f"ZZSEC1{i}", industry, 20.0)
+
+    stats = get_sector_ratio_stats(db, industry.id, "trailingPE")
+
+    assert stats is None
+
+
+def test_get_sector_ratio_stats_computes_median_once_enough_companies(db: Session) -> None:
+    industry = Industry(code="ZZSECTOR2", name="Test Sector 2")
+    db.add(industry)
+    db.flush()
+    for i, pe in enumerate([10.0, 20.0, 90.0]):  # median 20, not skewed by the 90 outlier
+        _seed_company_with_pe(db, f"ZZSEC2{i}", industry, pe)
+
+    stats = get_sector_ratio_stats(db, industry.id, "trailingPE")
+
+    assert stats is not None
+    assert stats.median == 20.0
+    assert stats.sample_size == 3
+
+
+def test_get_sector_ratio_stats_excludes_negative_pe(db: Session) -> None:
+    """A negative P/E (loss-making company) isn't a valuation multiple in
+    the sense this comparison cares about — it must not pull the sector
+    figure toward a number that doesn't mean what P/E is supposed to mean."""
+    industry = Industry(code="ZZSECTOR3", name="Test Sector 3")
+    db.add(industry)
+    db.flush()
+    for pe in [10.0, 20.0, 30.0]:
+        _seed_company_with_pe(db, f"ZZSEC3P{pe}", industry, pe)
+    _seed_company_with_pe(db, "ZZSEC3NEG", industry, -50.0)
+
+    stats = get_sector_ratio_stats(db, industry.id, "trailingPE")
+
+    assert stats is not None
+    assert stats.sample_size == 3  # the negative one excluded, not counted
+    assert stats.median == 20.0
+
+
+def test_get_sector_ratio_stats_only_counts_the_requested_metric(db: Session) -> None:
+    industry = Industry(code="ZZSECTOR4", name="Test Sector 4")
+    db.add(industry)
+    db.flush()
+    for i, pe in enumerate([10.0, 20.0, 30.0]):
+        _seed_company_with_pe(db, f"ZZSEC4{i}", industry, pe)
+
+    stats = get_sector_ratio_stats(db, industry.id, "forwardPE")
+
+    assert stats is None  # only trailingPE was seeded

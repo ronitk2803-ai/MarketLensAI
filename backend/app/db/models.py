@@ -183,6 +183,30 @@ class FinancialMetric(Base):
     as_of: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SectorIndexPe(Base):
+    """NSE's own daily sectoral-index P/E/P/B/dividend-yield (one row per
+    Nifty index NSE publishes it for, e.g. "Nifty Financial Services") —
+    the authoritative "what's this sector trading at" figure, computed by
+    NSE across the index's full constituent set. Latest-known-value cache,
+    like FinancialMetric: refreshed once daily, no history kept, because
+    the comparison only ever needs "today's" figure.
+
+    See app/services/sector_index.py's INDUSTRY_TO_NIFTY_INDEX for the
+    (partial — not every app/db/models.py Industry has an official Nifty
+    sectoral index) mapping from this app's own industry taxonomy to these
+    rows."""
+
+    __tablename__ = "sector_index_pe"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    index_name: Mapped[str] = mapped_column(unique=True)
+    pe: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    pb: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    div_yield: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    index_date: Mapped[dt.date]
+    as_of: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class CorporateAction(Base):
     """Splits/bonus/dividends/rights — drives price adjustment (correctness-critical, D-007)."""
 

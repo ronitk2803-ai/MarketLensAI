@@ -4,7 +4,7 @@ import { Panel } from "@/components/terminal/Panel";
 import { crores, croreShares, DASH } from "@/lib/format";
 import { marketCapCategory, marketCapCategoryTone } from "@/lib/market-cap";
 import { cn } from "@/lib/utils";
-import type { Fundamentals, Meta } from "@/lib/api";
+import type { Fundamentals, Meta, SectorPe } from "@/lib/api";
 
 const RATIO_LABELS: Record<string, string> = {
   debtToEquity: "Debt / Equity",
@@ -56,12 +56,49 @@ function formatRatio(metric: string, value: number): string {
   return value.toFixed(2);
 }
 
+/**
+ * "Is this P/E high or low" is a question this company's own numbers can't
+ * answer alone — this is what actually answers it, next to the figure
+ * that prompted it rather than in a separate panel the reader has to go
+ * find.
+ *
+ * Trailing P/E prefers NSE's own sectoral-index figure (the real, official
+ * "what's this sector trading at," computed by NSE across the index's
+ * full constituent set — see app/services/sector_index.py) and labels it
+ * as such; only when this company's industry has no matching Nifty
+ * sectoral index does it fall back to a median across whichever
+ * same-industry companies this app has fundamentals cached for, and that
+ * fallback is also labelled so the two are never confused for each other.
+ * Forward P/E has no NSE equivalent, so it's always the peer median.
+ *
+ * `null` throughout (never "0 companies") whenever there's nothing
+ * meaningful to show — a thin data day reads as "not enough data yet,"
+ * never as a two-company average dressed up as a sector figure.
+ */
+function sectorPeLine(metric: string, sectorPe: SectorPe): string | null {
+  if (metric === "trailingPE" && sectorPe.trailing_pe != null) {
+    const value = sectorPe.trailing_pe.toFixed(2);
+    if (sectorPe.trailing_pe_source === "nse_index") {
+      return `${sectorPe.trailing_pe_index_name} ${value}`;
+    }
+    return `Sector median ${value} (n=${sectorPe.trailing_pe_sample_size})`;
+  }
+  if (metric === "forwardPE" && sectorPe.forward_median != null) {
+    return `Sector median ${sectorPe.forward_median.toFixed(2)} (n=${sectorPe.forward_sample_size})`;
+  }
+  return null;
+}
+
 export function FundamentalsPanel({
   fundamentals,
   meta,
+  industry,
 }: {
   fundamentals: Fundamentals;
   meta: Meta;
+  /** Also shown in the page header — repeated here so it reads next to
+      market cap / cap size rather than requiring a scroll back up. */
+  industry?: string | null;
 }) {
   const hasData = fundamentals.ratios.length > 0 || fundamentals.income_statement.length > 0;
 
@@ -96,6 +133,14 @@ export function FundamentalsPanel({
         <div className="flex flex-col">
           {fundamentals.ratios.length > 0 && (
             <div className="grid grid-cols-2 gap-y-3 p-3 sm:grid-cols-4 lg:grid-cols-6">
+              {industry && (
+                <div className="flex flex-col gap-0.5 border-l border-border px-3 first:border-l-0 first:pl-0">
+                  <span className="label-caps">Industry</span>
+                  <span className="truncate text-sm font-medium" title={industry}>
+                    {industry}
+                  </span>
+                </div>
+              )}
               {capCategory && (
                 <div className="flex flex-col gap-0.5 border-l border-border px-3 first:border-l-0 first:pl-0">
                   <KpiLabel metric="marketCapCategory" label="Cap size" />
@@ -104,17 +149,23 @@ export function FundamentalsPanel({
                   </span>
                 </div>
               )}
-              {fundamentals.ratios.map((r) => (
-                <div
-                  key={r.metric}
-                  className="flex flex-col gap-0.5 border-l border-border px-3 first:border-l-0 first:pl-0"
-                >
-                  <KpiLabel metric={r.metric} label={RATIO_LABELS[r.metric] ?? r.metric} />
-                  <span className="num text-sm font-medium">
-                    {formatRatio(r.metric, r.value)}
-                  </span>
-                </div>
-              ))}
+              {fundamentals.ratios.map((r) => {
+                const sectorLine = sectorPeLine(r.metric, fundamentals.sector_pe);
+                return (
+                  <div
+                    key={r.metric}
+                    className="flex flex-col gap-0.5 border-l border-border px-3 first:border-l-0 first:pl-0"
+                  >
+                    <KpiLabel metric={r.metric} label={RATIO_LABELS[r.metric] ?? r.metric} />
+                    <span className="num text-sm font-medium">
+                      {formatRatio(r.metric, r.value)}
+                    </span>
+                    {sectorLine && (
+                      <span className="num text-[10.5px] text-muted-foreground">{sectorLine}</span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 

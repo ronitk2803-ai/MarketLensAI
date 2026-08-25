@@ -1,6 +1,10 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # See docker-compose.prod.yml's postgres service for why — a podman
+    # machine restart stops every container with no restart policy to
+    # recover them, which is exactly what took this one down too.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: mlai
       POSTGRES_PASSWORD: mlai

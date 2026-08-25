@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.engines.opportunity.registry import SCREEN_LABELS, SCREENS
-from app.services.opportunities import run_ranked_screen_with_sparklines
+from app.services.opportunities import list_industries, run_ranked_screen_with_sparklines
 
 router = APIRouter(tags=["opportunities"])
 
@@ -29,14 +29,24 @@ def list_screens() -> dict:
     return _envelope(data, source="static")
 
 
+@router.get("/opportunities/industries")
+def list_opportunity_industries(db: Session = Depends(get_db)) -> dict:
+    data = [{"code": code, "name": name} for code, name in list_industries(db)]
+    return _envelope(data, source="db")
+
+
 @router.get("/opportunities")
 def get_opportunities(
-    screen: str = Query(...), db: Session = Depends(get_db)
+    screen: str = Query(...),
+    industry: str | None = Query(default=None),
+    db: Session = Depends(get_db),
 ) -> dict:
     if screen not in SCREENS:
         raise HTTPException(status_code=400, detail=f"unknown screen: {screen!r}")
+    if industry is not None and industry not in {code for code, _ in list_industries(db)}:
+        raise HTTPException(status_code=400, detail=f"unknown industry: {industry!r}")
 
-    result = run_ranked_screen_with_sparklines(db, screen)
+    result = run_ranked_screen_with_sparklines(db, screen, industry=industry)
     data = [
         {
             "symbol": r.hit.asset.symbol,
@@ -50,6 +60,7 @@ def get_opportunities(
             # bars the screen already loaded and adjusted, so it costs no
             # extra query.
             "spark": result.sparklines.get(r.hit.asset.symbol, []),
+            "industry": result.industries.get(r.hit.asset.symbol, ("", None))[1],
         }
         for r in result.ranked
     ]

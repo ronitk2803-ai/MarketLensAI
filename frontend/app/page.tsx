@@ -3,8 +3,9 @@ import Link from "next/link";
 import { MoversBoard } from "@/components/domain/MoversBoard";
 import { WatchlistPanel } from "@/components/domain/WatchlistPanel";
 import { Panel } from "@/components/terminal/Panel";
-import { getOpportunities } from "@/lib/api";
+import { getOpportunities, getOpportunityIndustries } from "@/lib/api";
 import { tradingDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { OpportunityHit } from "@/lib/api";
 
 // Reads live screener output, so it must not be frozen into the build (the
@@ -19,20 +20,40 @@ const BOARDS = [
   { screen: "below_dma200", title: "Below 200-day average" },
 ];
 
-async function safeScreen(screen: string): Promise<{ hits: OpportunityHit[]; asOf: string | null }> {
+async function safeScreen(
+  screen: string,
+  industry: string | undefined,
+): Promise<{ hits: OpportunityHit[]; asOf: string | null }> {
   // One screen failing (or the whole backend being down) should degrade that
   // board to an empty state, not blank the entire dashboard.
   try {
-    const result = await getOpportunities(screen);
+    const result = await getOpportunities(screen, industry);
     return { hits: result.data, asOf: result.meta.as_of };
   } catch {
     return { hits: [], asOf: null };
   }
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ industry?: string }>;
+}) {
+  const [{ industry: rawIndustry }, industriesResult] = await Promise.all([
+    searchParams,
+    getOpportunityIndustries().catch(() => ({ data: [] })),
+  ]);
+  const industries = industriesResult.data;
+  // An industry from an old bookmark/link that's since been renamed falls
+  // back to unfiltered rather than silently returning zero rows everywhere.
+  const activeIndustry =
+    rawIndustry && industries.some((i) => i.code === rawIndustry) ? rawIndustry : undefined;
+
   const boards = await Promise.all(
-    BOARDS.map(async (board) => ({ ...board, ...(await safeScreen(board.screen)) })),
+    BOARDS.map(async (board) => ({
+      ...board,
+      ...(await safeScreen(board.screen, activeIndustry)),
+    })),
   );
 
   const asOf = boards.find((b) => b.asOf)?.asOf ?? null;
@@ -66,13 +87,58 @@ export default async function Home() {
 
       <WatchlistPanel />
 
+      {/* Filters every board below at once — same idea as the screen pills
+          on /opportunities, applied here to industry instead of screen. */}
+      {industries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="label-caps mr-1 text-muted-foreground">Industry</span>
+          <Link
+            href="/"
+            className={cn(
+              "rounded-sm border px-2.5 py-1 text-xs transition-colors",
+              !activeIndustry
+                ? "border-primary bg-primary/15 font-medium text-foreground"
+                : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+            )}
+          >
+            All
+          </Link>
+          {industries.map((i) => (
+            <Link
+              key={i.code}
+              href={`/?industry=${encodeURIComponent(i.code)}`}
+              className={cn(
+                "rounded-sm border px-2.5 py-1 text-xs transition-colors",
+                i.code === activeIndustry
+                  ? "border-primary bg-primary/15 font-medium text-foreground"
+                  : "border-border text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+              )}
+            >
+              {i.name}
+            </Link>
+          ))}
+        </div>
+      )}
+
       {totalHits === 0 ? (
         <Panel>
           <div className="flex flex-col items-center gap-2 py-12 text-center">
             <p className="text-sm font-medium">No screener data yet</p>
             <p className="max-w-md text-xs text-muted-foreground">
-              Either no stock currently meets any screen&apos;s threshold, or the universe
-              hasn&apos;t been ingested yet. Run the daily ingestion job, then reload.
+              {activeIndustry ? (
+                <>
+                  Nothing in this industry currently meets any screen&apos;s threshold.{" "}
+                  <Link href="/" className="text-primary hover:underline">
+                    Clear the filter
+                  </Link>{" "}
+                  to see every industry.
+                </>
+              ) : (
+                <>
+                  Either no stock currently meets any screen&apos;s threshold, or the universe
+                  hasn&apos;t been ingested yet. Run the daily ingestion job, then reload.
+                </>
+              )}
             </p>
           </div>
         </Panel>
@@ -82,7 +148,7 @@ export default async function Home() {
             <MoversBoard
               key={board.screen}
               title={board.title}
-              href={`/opportunities?screen=${board.screen}`}
+              href={`/opportunities?screen=${board.screen}${activeIndustry ? `&industry=${encodeURIComponent(activeIndustry)}` : ""}`}
               hits={board.hits}
             />
           ))}

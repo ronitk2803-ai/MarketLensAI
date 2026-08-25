@@ -15,10 +15,15 @@ from app.providers.errors import ProviderError
 from app.services.adjusted_prices import get_adjusted_bars
 from app.services.company_summary import generate_summary, get_cached_summary
 from app.services.corporate_actions import get_or_fetch_corporate_actions
-from app.services.fundamentals import get_or_fetch_ratios, get_or_fetch_statements
+from app.services.fundamentals import (
+    get_or_fetch_ratios,
+    get_or_fetch_statements,
+    get_sector_ratio_stats,
+)
 from app.services.news import get_or_fetch_news
-from app.services.scoring import get_or_compute_score
+from app.services.scoring import gather_score_inputs, get_or_compute_score
 from app.services.search import search_assets
+from app.services.sector_index import get_sector_pe_for_industry
 from app.services.technicals import compute_technicals
 
 router = APIRouter(tags=["companies"])
@@ -148,6 +153,38 @@ def get_fundamentals(symbol: str, db: Session = Depends(get_db)) -> dict:
         )
         period["line_items"][row.line_item] = float(row.value)
 
+    # For "is this P/E high or low" — a number this company's own ratios
+    # can't answer alone. NSE's own sectoral-index P/E (get_sector_pe_for_industry)
+    # is the authoritative figure and is tried first; it only covers 18 of
+    # this app's 20 industries (see INDUSTRY_TO_NIFTY_INDEX), so the
+    # remaining two — and the "forward" side, which NSE's file doesn't
+    # carry at all — fall back to a median across whatever same-industry
+    # companies this app happens to have fundamentals cached for
+    # (get_sector_ratio_stats). None/0 always means "not enough data yet,"
+    # never "this company has no peers."
+    industry = asset.company.industry if asset.company else None
+    industry_id = industry.id if industry else None
+    industry_code = industry.code if industry else None
+
+    nse_sector = get_sector_pe_for_industry(db, industry_code)
+    forward_stats = get_sector_ratio_stats(db, industry_id, "forwardPE") if industry_id else None
+    trailing_pe: float | None
+    trailing_pe_source: str | None
+    trailing_pe_index_name: str | None
+    if nse_sector is not None and nse_sector.pe is not None:
+        trailing_pe = float(nse_sector.pe)
+        trailing_pe_source = "nse_index"
+        trailing_pe_index_name = nse_sector.index_name
+        trailing_pe_sample_size = 0
+    else:
+        trailing_stats = (
+            get_sector_ratio_stats(db, industry_id, "trailingPE") if industry_id else None
+        )
+        trailing_pe = trailing_stats.median if trailing_stats else None
+        trailing_pe_source = "peer_median" if trailing_stats else None
+        trailing_pe_index_name = None
+        trailing_pe_sample_size = trailing_stats.sample_size if trailing_stats else 0
+
     data = {
         "ratios": [
             {
@@ -161,6 +198,14 @@ def get_fundamentals(symbol: str, db: Session = Depends(get_db)) -> dict:
         "income_statement": sorted(
             periods.values(), key=lambda p: p["period_end"], reverse=True
         ),
+        "sector_pe": {
+            "trailing_pe": trailing_pe,
+            "trailing_pe_source": trailing_pe_source,
+            "trailing_pe_index_name": trailing_pe_index_name,
+            "trailing_pe_sample_size": trailing_pe_sample_size,
+            "forward_median": forward_stats.median if forward_stats else None,
+            "forward_sample_size": forward_stats.sample_size if forward_stats else 0,
+        },
     }
     # Always "low": even a successful fetch here is single-source and
     # uncross-checked (Build_plan.md §6/§H) — finding data doesn't earn it
@@ -216,6 +261,15 @@ def get_score(symbol: str, db: Session = Depends(get_db)) -> dict:
     copy at the frontend layer too)."""
     asset = _get_asset_or_404(db, symbol)
     score, components = get_or_compute_score(db, asset)
+    # Re-derived, not stored on ScoreComponent (which deliberately keeps
+    # raw_value=None — see aggregate.py: several components blend two raw
+    # inputs, so there's no single scalar to store per component without
+    # misrepresenting a blend as one number). Cache-first underneath
+    # (technicals from stored bars, fundamentals from financial_metric), so
+    # this is a read against already-stored data, not a live provider call,
+    # and — because get_or_compute_score only recomputes once a day — it
+    # reflects the exact inputs today's score was actually built from.
+    inputs = gather_score_inputs(db, asset)
 
     data = {
         "value": float(score.value) if score.value is not None else None,
@@ -232,6 +286,17 @@ def get_score(symbol: str, db: Session = Depends(get_db)) -> dict:
             }
             for c in components
         ],
+        "inputs": {
+            "rsi14": inputs.rsi14,
+            "drawdown_pct": inputs.drawdown_pct,
+            "debt_to_equity": inputs.debt_to_equity,
+            "gross_margins": inputs.gross_margins,
+            "revenue_growth": inputs.revenue_growth,
+            "earnings_growth": inputs.earnings_growth,
+            "price_to_book": inputs.price_to_book,
+            "relative_volume": inputs.relative_volume,
+            "delivery_pct": inputs.delivery_pct,
+        },
     }
     return _envelope(data, source="mlai_scoring_v1", confidence=score.confidence)
 

@@ -26,6 +26,13 @@ name: ronrack-prod
 services:
   postgres:
     image: postgres:16-alpine
+    # Without this, a podman machine restart (VM sleep/wake, host reboot)
+    # cleanly stops every container and nothing brings them back — the
+    # whole site silently goes down with no crash to investigate (hit live
+    # 2026-08-25: all four containers were "Exited (0)" with no restart
+    # policy to recover them). `unless-stopped` restarts on boot/failure
+    # but still respects an explicit `podman stop`.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: mlai
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlai}
@@ -43,6 +50,7 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +87,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy

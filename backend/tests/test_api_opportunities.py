@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, PriceOHLCV, Score, ScoreProfile
+from app.db.models import Asset, Company, Industry, PriceOHLCV, Score, ScoreProfile
 from app.db.session import get_db
 from app.main import app
 
@@ -124,3 +124,61 @@ def test_get_opportunities_ranks_by_opportunity_score(db: Session) -> None:
     body = response.json()
     symbols = [h["symbol"] for h in body["data"]]
     assert symbols.index("ZZAPIRANKB") < symbols.index("ZZAPIRANKA")
+
+
+def test_list_opportunity_industries_returns_seeded_industry() -> None:
+    response = client.get("/api/v1/opportunities/industries")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["data"], list)
+    if body["data"]:
+        assert {"code", "name"} <= set(body["data"][0])
+
+
+def test_get_opportunities_rejects_unknown_industry() -> None:
+    response = client.get(
+        "/api/v1/opportunities", params={"screen": "down_10d", "industry": "not_a_real_industry"}
+    )
+    assert response.status_code == 400
+
+
+def test_get_opportunities_filters_by_industry(db: Session) -> None:
+    industry = Industry(code="ZZAPIIND", name="Test API Industry")
+    db.add(industry)
+    db.flush()
+
+    in_industry = Asset(symbol="ZZAPIINDA", exchange="NSE", market="IN", name="In Industry Co")
+    out_of_industry = Asset(symbol="ZZAPIINDB", exchange="NSE", market="IN", name="Other Co")
+    db.add_all([in_industry, out_of_industry])
+    db.flush()
+    db.add(Company(asset_id=in_industry.id, industry_id=industry.id))
+    db.flush()
+
+    today = dt.date.today()
+    closes = [100.0] * 10 + [70.0]
+    for asset in (in_industry, out_of_industry):
+        for i, close in enumerate(closes):
+            db.add(
+                PriceOHLCV(
+                    asset_id=asset.id,
+                    date=today - dt.timedelta(days=len(closes) - 1 - i),
+                    open=Decimal(str(close)),
+                    high=Decimal(str(close)),
+                    low=Decimal(str(close)),
+                    close=Decimal(str(close)),
+                    volume=1000,
+                    source="test",
+                )
+            )
+    db.flush()
+
+    response = client.get(
+        "/api/v1/opportunities", params={"screen": "down_10d", "industry": "ZZAPIIND"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    symbols = {h["symbol"] for h in body["data"]}
+    assert symbols == {"ZZAPIINDA"}
+    hit = body["data"][0]
+    assert hit["industry"] == "Test API Industry"

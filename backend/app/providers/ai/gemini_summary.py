@@ -54,9 +54,22 @@ class GeminiSummaryProvider:
                         json={"contents": [{"parts": [{"text": prompt}]}]},
                     )
                 except httpx.HTTPError as error:
-                    raise ProviderError(
+                    # Network-level failure (timeout, connection reset) —
+                    # marked retryable, so it needs to actually go through
+                    # the same retry-with-backoff path as a 5xx below rather
+                    # than raising straight out of the loop on the very
+                    # first attempt. A slow/overloaded model read-timing-out
+                    # is at least as common as it returning a 503 outright
+                    # (verified live 2026-08-25: a single request to Gemini
+                    # hung past the 30s client timeout), so this needs the
+                    # same tolerance.
+                    last_error = ProviderError(
                         "gemini_summary", f"request failed: {error}", retryable=True
-                    ) from error
+                    )
+                    if attempt < _MAX_ATTEMPTS:
+                        time.sleep(_RETRY_DELAY_SECONDS)
+                        continue
+                    raise last_error from error
 
                 if response.status_code == 429:
                     raise ProviderError("gemini_summary", "rate limited", retryable=True)
@@ -83,7 +96,12 @@ class GeminiSummaryProvider:
                     # outcome, not a parsing bug, so it shouldn't look like
                     # a crash upstream, and retrying won't fix it.
                     raise ProviderError("gemini_summary", "no summary in response") from error
-            raise last_error  # unreachable, satisfies type-checking
+            # Reachable only by exhausting every attempt, and each iteration
+            # that doesn't return or raise directly sets last_error first —
+            # so it's genuinely always set here, mypy just can't see that
+            # across the loop.
+            assert last_error is not None
+            raise last_error
         finally:
             if owns_client:
                 client.close()

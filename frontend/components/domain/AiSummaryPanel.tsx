@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { Panel } from "@/components/terminal/Panel";
 import { relativeTime } from "@/lib/format";
+import { parseAiSummary } from "@/lib/parse-ai-summary";
 import type { AiSummary } from "@/lib/api";
 
 /**
@@ -18,6 +19,61 @@ import type { AiSummary } from "@/lib/api";
  * clicks on an unchanged company are free re-reads, which is what keeps
  * this feature both free-to-run and free-to-use regardless of traffic.
  */
+/**
+ * Renders the synthesis + supporting/risk factors if the text matches
+ * that shape, otherwise the raw text as one paragraph — a parsing miss
+ * degrades to plain text, never to nothing.
+ *
+ * Deliberately no color-coding (no green for "supporting", red for
+ * "risk"): this app's up/down tokens mean "price rose/fell" everywhere
+ * else, and reusing them here would visually assert a bullish/bearish
+ * verdict through color even though the text itself is explicitly
+ * instructed never to give one — the "no advice" rule has to hold for the
+ * whole panel, not just the words.
+ */
+function SummaryBody({ text }: { text: string }) {
+  const parsed = parseAiSummary(text);
+  if (!parsed) {
+    return <p className="text-sm leading-relaxed">{text}</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {parsed.intro && <p className="text-sm leading-relaxed">{parsed.intro}</p>}
+      {parsed.supportingFactors.length > 0 && (
+        <div>
+          <p className="label-caps mb-1">Supporting factors</p>
+          <ul className="flex flex-col gap-1 text-sm leading-snug">
+            {parsed.supportingFactors.map((f, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-muted-foreground" aria-hidden>
+                  •
+                </span>
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {parsed.riskFactors.length > 0 && (
+        <div>
+          <p className="label-caps mb-1">Risk factors</p>
+          <ul className="flex flex-col gap-1 text-sm leading-snug">
+            {parsed.riskFactors.map((f, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-muted-foreground" aria-hidden>
+                  •
+                </span>
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AiSummaryPanel({ symbol, initial }: { symbol: string; initial: AiSummary | null }) {
   const [summary, setSummary] = useState(initial);
   const [loading, setLoading] = useState(false);
@@ -76,8 +132,8 @@ export function AiSummaryPanel({ symbol, initial }: { symbol: string; initial: A
           {error && <p className="text-xs text-down">{error}</p>}
         </div>
       ) : (
-        <div className="flex flex-col gap-2 px-3 py-3">
-          <p className="text-sm leading-relaxed">{summary.summary}</p>
+        <div className="flex flex-col gap-3 px-3 py-3">
+          <SummaryBody text={summary.summary} />
           <p className="text-[11px] text-muted-foreground">
             Generated {relativeTime(summary.generated_at)}
           </p>

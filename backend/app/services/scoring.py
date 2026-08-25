@@ -42,7 +42,11 @@ def get_active_profile(db: Session, industry_code: str = "default") -> ScoreProf
     return profile
 
 
-def _gather_inputs(db: Session, asset: Asset) -> ScoreInputs:
+def gather_score_inputs(db: Session, asset: Asset) -> ScoreInputs:
+    """Public: also used by company_summary.py's AI-summary prompt and the
+    score API's explainer payload, so the score, its breakdown, and the
+    summary all ground out in the exact same numbers rather than three
+    independently-computed views that could quietly drift apart."""
     technicals = compute_technicals(db, asset, lookback_days=120)
     ratio_rows = {r.metric: float(r.value) for r in get_or_fetch_ratios(db, asset)}
 
@@ -107,7 +111,7 @@ def get_or_compute_score(db: Session, asset: Asset) -> tuple[Score, list[ScoreCo
         components = db.query(ScoreComponent).filter_by(score_id=existing.id).all()
         return existing, components
 
-    inputs = _gather_inputs(db, asset)
+    inputs = gather_score_inputs(db, asset)
     result: ScoreResult = compute_score(inputs, profile.weights)
 
     confidence = "high" if result.coverage >= 0.6 else "low"
