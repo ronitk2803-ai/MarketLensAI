@@ -3,11 +3,12 @@
 import Link from "next/link";
 
 import { Delta } from "@/components/terminal/Delta";
+import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { Panel } from "@/components/terminal/Panel";
 import { Sparkline } from "@/components/terminal/Sparkline";
 import { compact, num, price, scoreTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { OpportunityHit } from "@/lib/api";
+import type { Meta, OpportunityHit } from "@/lib/api";
 
 /**
  * Compact leaderboard of one screen's top hits — the home dashboard's unit.
@@ -42,20 +43,27 @@ export function MoversBoard({
   title,
   href,
   hits,
+  meta,
   limit = 6,
 }: {
   title: string;
   href: string;
   hits: OpportunityHit[];
+  meta: Meta | null;
   limit?: number;
 }) {
   return (
     <Panel
       title={title}
       actions={
-        <Link href={href} className="text-[11px] text-primary hover:underline">
-          View all
-        </Link>
+        <div className="flex items-center gap-3">
+          {meta && (
+            <ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />
+          )}
+          <Link href={href} className="text-[11px] text-primary hover:underline">
+            View all
+          </Link>
+        </div>
       }
       bodyClassName="p-0"
       fullscreenable

@@ -7,7 +7,7 @@ import { getOpportunities, getOpportunityIndustries } from "@/lib/api";
 import { tradingDate } from "@/lib/format";
 import { getSignedInUser } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import type { OpportunityHit } from "@/lib/api";
+import type { Meta, OpportunityHit } from "@/lib/api";
 
 // Reads live screener output, so it must not be frozen into the build (the
 // backend isn't reachable during `next build`) — same reasoning as
@@ -24,14 +24,14 @@ const BOARDS = [
 async function safeScreen(
   screen: string,
   industry: string | undefined,
-): Promise<{ hits: OpportunityHit[]; asOf: string | null }> {
+): Promise<{ hits: OpportunityHit[]; meta: Meta | null }> {
   // One screen failing (or the whole backend being down) should degrade that
   // board to an empty state, not blank the entire dashboard.
   try {
     const result = await getOpportunities(screen, industry);
-    return { hits: result.data, asOf: result.meta.as_of };
+    return { hits: result.data, meta: result.meta };
   } catch {
-    return { hits: [], asOf: null };
+    return { hits: [], meta: null };
   }
 }
 
@@ -58,7 +58,7 @@ export default async function Home({
     })),
   );
 
-  const asOf = boards.find((b) => b.asOf)?.asOf ?? null;
+  const asOf = boards.find((b) => b.meta)?.meta?.as_of ?? null;
   const totalHits = boards.reduce((sum, b) => sum + b.hits.length, 0);
 
   return (
@@ -152,6 +152,7 @@ export default async function Home({
               title={board.title}
               href={`/opportunities?screen=${board.screen}${activeIndustry ? `&industry=${encodeURIComponent(activeIndustry)}` : ""}`}
               hits={board.hits}
+              meta={board.meta}
             />
           ))}
         </div>

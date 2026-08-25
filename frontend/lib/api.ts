@@ -322,7 +322,7 @@ export function getWatchlist(accessToken: string, deltaDays: number[]) {
   return apiFetch<WatchlistResponse>(`/watchlist?${params.toString()}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     cache: "no-store",
-  }).then((e) => e.data);
+  });
 }
 
 export function addToWatchlist(accessToken: string, symbol: string) {

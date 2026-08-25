@@ -142,6 +142,7 @@ export default async function CompanyPage({
           bars={bars}
           technicals={technicals.data.series}
           corporateActions={corporateActions.data}
+          meta={prices.meta}
         />
 
         <ScorePanel score={score.data} meta={score.meta} />
@@ -149,7 +150,7 @@ export default async function CompanyPage({
 
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
 
-      <AiSummaryPanel symbol={header.symbol} initial={aiSummary.data} />
+      <AiSummaryPanel symbol={header.symbol} initial={aiSummary.data} meta={aiSummary.meta} />
 
       <div className="grid gap-3 xl:grid-cols-[1fr_420px]">
         <FundamentalsPanel

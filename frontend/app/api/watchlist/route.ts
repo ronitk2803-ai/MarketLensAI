@@ -23,8 +23,8 @@ export async function GET(request: Request) {
     .filter((d) => Number.isFinite(d) && d > 0);
 
   try {
-    const data = await getWatchlist(accessToken, deltas);
-    return Response.json(data, { headers: { "Cache-Control": "no-store" } });
+    const { data, meta } = await getWatchlist(accessToken, deltas);
+    return Response.json({ ...data, meta }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const status = error instanceof ApiError ? error.status : 502;
     return Response.json(

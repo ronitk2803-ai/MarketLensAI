@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Delta } from "@/components/terminal/Delta";
+import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { Panel } from "@/components/terminal/Panel";
 import { RangeBar } from "@/components/terminal/RangeBar";
 import { Sparkline } from "@/components/terminal/Sparkline";
-import type { AssetSearchResult, AuthUser, LiveQuote, WatchlistQuote } from "@/lib/api";
+import type { AssetSearchResult, AuthUser, LiveQuote, Meta, WatchlistQuote } from "@/lib/api";
 import { price, tradingDate } from "@/lib/format";
 import { useLiveQuotes } from "@/lib/use-live-quotes";
 import { usePriceFlash } from "@/lib/use-price-flash";
@@ -40,6 +41,7 @@ import {
 export function WatchlistPanel({ user }: { user: AuthUser | null }) {
   const [deltaDays, setDeltaDays] = useDeltaDays();
   const [quotes, setQuotes] = useState<WatchlistQuote[]>([]);
+  const [meta, setMeta] = useState<Meta | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
@@ -53,8 +55,9 @@ export function WatchlistPanel({ user }: { user: AuthUser | null }) {
     try {
       const params = new URLSearchParams({ deltas: deltaDays.join(",") });
       const res = await fetch(`/api/watchlist?${params.toString()}`);
-      const data: { quotes: WatchlistQuote[] } = await res.json();
+      const data: { quotes: WatchlistQuote[]; meta?: Meta } = await res.json();
       setQuotes(data.quotes ?? []);
+      setMeta(data.meta ?? null);
       return data.quotes ?? [];
     } catch {
       return [];
@@ -159,6 +162,9 @@ export function WatchlistPanel({ user }: { user: AuthUser | null }) {
               <span className="size-1.5 animate-pulse rounded-full bg-up" />
               LIVE
             </span>
+          )}
+          {meta && (
+            <ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />
           )}
         </div>
       }

@@ -3,10 +3,11 @@
 import { Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { useState } from "react";
 
+import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { Panel } from "@/components/terminal/Panel";
 import { relativeTime } from "@/lib/format";
 import { parseAiSummary } from "@/lib/parse-ai-summary";
-import type { AiSummary } from "@/lib/api";
+import type { AiSummary, Meta } from "@/lib/api";
 
 /**
  * AI narrative summary — deliberately click-triggered, not auto-loaded.
@@ -74,7 +75,15 @@ function SummaryBody({ text }: { text: string }) {
   );
 }
 
-export function AiSummaryPanel({ symbol, initial }: { symbol: string; initial: AiSummary | null }) {
+export function AiSummaryPanel({
+  symbol,
+  initial,
+  meta,
+}: {
+  symbol: string;
+  initial: AiSummary | null;
+  meta: Meta;
+}) {
   const [summary, setSummary] = useState(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,16 +109,23 @@ export function AiSummaryPanel({ symbol, initial }: { symbol: string; initial: A
       title="AI summary"
       actions={
         summary && (
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={loading}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-            title="Regenerate — free unless something about the company changed"
-          >
-            <RefreshCw className={loading ? "size-3 animate-spin" : "size-3"} aria-hidden />
-            Regenerate
-          </button>
+          <div className="flex items-center gap-3">
+            <ProvenanceBadge
+              source={meta.source}
+              asOf={summary.generated_at}
+              confidence={meta.confidence}
+            />
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={loading}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+              title="Regenerate — free unless something about the company changed"
+            >
+              <RefreshCw className={loading ? "size-3 animate-spin" : "size-3"} aria-hidden />
+              Regenerate
+            </button>
+          </div>
         )
       }
       footnote="AI-generated interpretation, not verified data or investment advice."

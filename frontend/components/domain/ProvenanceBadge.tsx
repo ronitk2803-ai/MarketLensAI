@@ -2,6 +2,24 @@ import { Info } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
+/** Raw backend `source` strings are internal identifiers
+ * (`yfinance_fundamentals`, `mlai_scoring_v1`) — not copy a user should
+ * see verbatim. Unmapped values fall back to the raw string rather than
+ * disappearing, so a future/unrecognized source is never hidden. */
+const SOURCE_LABELS: Record<string, string> = {
+  cache: "Cached price",
+  upstox: "Upstox",
+  nse_bhavcopy: "NSE Bhavcopy",
+  yfinance_actions: "Yahoo Finance (corporate actions)",
+  yfinance_fundamentals: "Yahoo Finance (fundamentals)",
+  yfinance_quotes: "Yahoo Finance (live)",
+  google_news: "Google News",
+  gemini_summary: "Gemini AI",
+  mlai_scoring_v1: "MarketLens AI scoring",
+  db: "Stored data",
+  static: "Built-in screen definition",
+};
+
 /**
  * "source + as_of" hover affordance (architecture.md §E): every metric
  * should be able to reveal where it came from and how fresh it is, so
@@ -26,7 +44,7 @@ export function ProvenanceBadge({
         </span>
       </TooltipTrigger>
       <TooltipContent>
-        <p>Source: {source}</p>
+        <p>Source: {SOURCE_LABELS[source] ?? source}</p>
         <p>As of: {asOfLabel}</p>
         {confidence === "low" && <p>Coverage is limited for this view.</p>}
       </TooltipContent>
