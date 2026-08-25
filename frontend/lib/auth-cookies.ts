@@ -24,7 +24,18 @@ const REFRESH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 function baseOptions() {
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    // Deliberately NOT tied to NODE_ENV — the containerized deploy sets
+    // NODE_ENV=production while still being served over plain HTTP (no
+    // TLS anywhere in docker-compose.prod.yml), and a Secure cookie is
+    // silently dropped by the browser on a non-HTTPS origin. Verified
+    // live 2026-08-25: login returned a real Set-Cookie header with
+    // `Secure`, the redirect to `/` "succeeded," and the header still
+    // read signed-out on the next request — Chromium grants `localhost`
+    // itself an exception that let earlier testing through this browser
+    // pane hide the bug, but it doesn't extend to every hostname/browser
+    // a real visitor might use. Set COOKIE_SECURE=true only once this app
+    // is actually behind HTTPS.
+    secure: process.env.COOKIE_SECURE === "true",
     sameSite: "lax" as const,
     path: "/",
   };
