@@ -16,7 +16,7 @@ from app.engines.adjustment import adjust_bars
 from app.engines.opportunity.base import Hit
 from app.engines.opportunity.ranking import RankedHit, apply_attention_ranking
 from app.engines.opportunity.registry import SCREENS
-from app.services.corporate_actions import get_stored_corporate_actions
+from app.services.corporate_actions import get_stored_corporate_actions_bulk
 from app.services.prices import row_to_bar
 
 
@@ -49,10 +49,16 @@ def _load_universe_bars(db: Session, lookback_days: int) -> dict[AssetRef, list[
             name=asset_row.name,
         )
 
+    # One query for every asset's actions rather than one per asset: this
+    # loop covers the whole active universe, so the per-asset version was
+    # ~500 round trips per screen run — and the homepage runs four screens
+    # concurrently.
+    actions_by_asset = get_stored_corporate_actions_bulk(db, list(bars_by_asset))
+
     universe: dict[AssetRef, list[Bar]] = {}
     for asset_id, price_rows in bars_by_asset.items():
         raw_bars = [row_to_bar(r) for r in price_rows]
-        actions = get_stored_corporate_actions(db, asset_id)
+        actions = actions_by_asset.get(asset_id, [])
         universe[asset_refs[asset_id]] = adjust_bars(raw_bars, actions)
     return universe
 

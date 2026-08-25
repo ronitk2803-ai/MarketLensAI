@@ -72,6 +72,38 @@ def get_stored_corporate_actions(db: Session, asset_id: int) -> list[CorporateAc
     ]
 
 
+def get_stored_corporate_actions_bulk(
+    db: Session, asset_ids: list[int]
+) -> dict[int, list[CorporateActionEvent]]:
+    """Same pure-DB-read contract as get_stored_corporate_actions, for the
+    whole universe in one query instead of one per asset.
+
+    The screener adjusts every asset it loads, so the per-asset version
+    meant ~500 round trips per screen run — and the homepage fires four
+    screens at once. Assets with no stored actions are simply absent from
+    the result; the caller treats a missing key as "no adjustments", which
+    is what adjust_bars does with an empty list anyway."""
+    if not asset_ids:
+        return {}
+    rows = (
+        db.query(CorporateAction)
+        .filter(CorporateAction.asset_id.in_(asset_ids))
+        .order_by(CorporateAction.asset_id, CorporateAction.ex_date)
+        .all()
+    )
+    by_asset: dict[int, list[CorporateActionEvent]] = {}
+    for row in rows:
+        by_asset.setdefault(row.asset_id, []).append(
+            CorporateActionEvent(
+                type=row.type,
+                ex_date=row.ex_date,
+                ratio=float(row.ratio) if row.ratio is not None else None,
+                amount=float(row.amount) if row.amount is not None else None,
+            )
+        )
+    return by_asset
+
+
 def get_or_fetch_corporate_actions(db: Session, asset: Asset) -> list[CorporateActionEvent]:
     """Reads stored `corporate_action` rows; on first request for an asset
     (none stored yet), fetches once from the yfinance fallback and persists
