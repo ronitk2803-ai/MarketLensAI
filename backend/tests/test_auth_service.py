@@ -1,4 +1,5 @@
 import datetime as dt
+import time
 
 from sqlalchemy.orm import Session
 
@@ -118,3 +119,51 @@ def test_revoke_refresh_token_makes_it_unusable(db: Session) -> None:
 
 def test_revoke_refresh_token_is_a_no_op_for_an_unknown_token(db: Session) -> None:
     revoke_refresh_token(db, "never-issued")  # must not raise
+
+
+def test_verify_password_is_false_for_an_account_with_no_password() -> None:
+    """A Google-only account has hashed_password NULL. This must be a clean
+    False, not an exception: PasswordHasher.verify(None, ...) raises
+    AttributeError while decoding the hash — before argon2 runs, so no
+    argon2 exception class covers it — which would surface as a 500 where
+    the caller wanted "wrong credentials"."""
+    assert verify_password("anything", None) is False
+    assert verify_password("anything", "") is False
+
+
+def test_authenticate_user_rejects_an_account_with_no_password(db: Session) -> None:
+    user = AppUser(email="googleonly@example.com", hashed_password=None)
+    db.add(user)
+    db.flush()
+
+    assert authenticate_user(db, "googleonly@example.com", "password123") is None
+
+
+def test_authenticate_user_costs_the_same_for_known_and_unknown_emails(
+    db: Session,
+) -> None:
+    """Regression: the original `user is None or not verify_password(...)`
+    short-circuited, so an unknown address never reached Argon2 and returned
+    in ~1ms against ~60ms for a registered one. That timing gap re-enabled
+    exactly the account enumeration the deliberately-identical error message
+    in app/api/v1/auth.py exists to prevent.
+
+    Asserted as a ratio rather than an absolute, and generously — the point
+    is that both paths run one hash, not that a shared CI runner produces
+    stable timings."""
+    user = create_user(db, "timing@example.com", "password123")
+    assert user is not None
+
+    def _elapsed(email: str) -> float:
+        start = time.perf_counter()
+        authenticate_user(db, email, "the-wrong-password")
+        return time.perf_counter() - start
+
+    # Warm up, so first-call import/allocation costs don't land in a sample.
+    _elapsed("timing@example.com")
+
+    known = min(_elapsed("timing@example.com") for _ in range(3))
+    unknown = min(_elapsed("nosuchuser@example.com") for _ in range(3))
+
+    # Before the fix this ratio was ~60x.
+    assert 0.2 < (unknown / known) < 5.0

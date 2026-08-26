@@ -57,6 +57,14 @@ class UserResponse(BaseModel):
     # answer "what does this session need to render the chrome", and the
     # bell is chrome.
     unread_alert_count: int = 0
+    # Same "AppHeader already awaits this" argument as the bell count above:
+    # the verify-your-email banner and the Google-account-has-no-password
+    # case are both chrome, and both are answerable from the row /me has
+    # already loaded. Booleans rather than the raw timestamp/hash — the
+    # frontend has no business with either value, only with the two
+    # questions they answer.
+    email_verified: bool = False
+    has_password: bool = True
 
 
 def _min_password_length_check(password: str) -> None:
@@ -113,4 +121,6 @@ def me(
         id=current_user.id,
         email=current_user.email,
         unread_alert_count=unread_count(db, current_user.id),
+        email_verified=current_user.email_verified_at is not None,
+        has_password=current_user.hashed_password is not None,
     )

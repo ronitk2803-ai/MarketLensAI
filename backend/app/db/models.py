@@ -346,13 +346,37 @@ class AppUser(Base):
 
     `hashed_password` is an Argon2 hash (app/services/auth.py), never the
     raw password — same "never store the sensitive thing directly" rule
-    RefreshToken.token_hash below follows for tokens."""
+    RefreshToken.token_hash below follows for tokens. It is NULLABLE
+    because an account created through Google sign-in has no password at
+    all; a sentinel "unusable hash" string would have worked too, but a
+    real NULL is the honest representation and lets `has_password` be a
+    plain IS NULL check rather than a comparison against a magic value.
+    Every read path must therefore handle None — see
+    app/services/auth.py's authenticate_user.
+
+    `email` is a plain String with a unique btree, NOT citext, and
+    lowercasing happens in application code (create_user,
+    authenticate_user, and the Google link path). Any new write path has
+    to `.strip().lower()` itself or it will happily insert a second row
+    for the same address in different case."""
 
     __tablename__ = "app_user"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(unique=True, index=True)
-    hashed_password: Mapped[str]
+    hashed_password: Mapped[str | None] = mapped_column(default=None)
+    # When the address was proven reachable, not merely whether — a
+    # timestamp answers "how long has this account been verified?" for
+    # free, and NULL is an unambiguous "never". Existing accounts were
+    # backfilled to their created_at when this column was added, so the
+    # verified gate only ever applies to signups after that migration.
+    email_verified_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # Google's `sub` claim: stable for the life of the Google account and
+    # unchanged if the user renames their Gmail address, which is exactly
+    # why the link is keyed on this rather than on email.
+    google_sub: Mapped[str | None] = mapped_column(unique=True, default=None)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -586,6 +586,12 @@ export interface AuthUser {
    * AppHeader already awaits this on every page render, so the bell's
    * count costs no extra round trip. */
   unread_alert_count: number;
+  /** Whether the address has been proven reachable. Drives the banner and
+   *  explains a 403 from any endpoint that saves something. */
+  email_verified: boolean;
+  /** False for an account created through Google sign-in, which has no
+   *  password at all — so "change password" must not be offered. */
+  has_password: boolean;
 }
 
 // In-app alerts (Build_plan.md §S step 24) — bare JSON like Thesis and

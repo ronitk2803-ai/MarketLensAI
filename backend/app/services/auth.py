@@ -26,12 +26,32 @@ from app.db.models import AppUser, RefreshToken
 _hasher = PasswordHasher()
 JWT_ALGORITHM = "HS256"
 
+# Verified against when there is no real hash to check, so that a login
+# attempt for an address we've never seen costs the same ~60ms of Argon2 as
+# one for a registered address. Without it the `or` in authenticate_user
+# short-circuits and an unknown email returns in ~1ms — a timing oracle that
+# hands back exactly the account enumeration the identical error message in
+# app/api/v1/auth.py exists to prevent. Computed once at import; the value
+# is never used for anything but burning the same amount of CPU.
+_DUMMY_HASH = _hasher.hash(secrets.token_urlsafe(32))
+
 
 def hash_password(raw_password: str) -> str:
     return _hasher.hash(raw_password)
 
 
-def verify_password(raw_password: str, hashed_password: str) -> bool:
+def verify_password(raw_password: str, hashed_password: str | None) -> bool:
+    """False, never an exception, for anything that isn't a matching hash.
+
+    `hashed_password` is None for a Google-only account (see AppUser). That
+    case has to be handled here rather than at the call site because
+    PasswordHasher.verify(None, ...) raises AttributeError while decoding
+    the hash — before argon2 runs at all, so no argon2 exception class
+    covers it, and the caller would get a 500 where it wanted a clean
+    "wrong credentials".
+    """
+    if not hashed_password:
+        return False
     try:
         return _hasher.verify(hashed_password, raw_password)
     except VerifyMismatchError:
@@ -53,8 +73,13 @@ def create_user(db: Session, email: str, password: str) -> AppUser | None:
 
 
 def authenticate_user(db: Session, email: str, password: str) -> AppUser | None:
+    """None for an unknown email, a wrong password, or a Google-only account
+    with no password set — the caller cannot tell which, and neither can a
+    stopwatch: every path runs exactly one Argon2 verification."""
     user = db.query(AppUser).filter_by(email=email.strip().lower()).one_or_none()
-    if user is None or not verify_password(password, user.hashed_password):
+    stored = user.hashed_password if user is not None else None
+    matched = verify_password(password, stored or _DUMMY_HASH)
+    if user is None or not stored or not matched:
         return None
     return user
 
