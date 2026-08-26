@@ -36,6 +36,14 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+psycopg://mlai:mlai@localhost:5432/mlai
+      # Settings declares `jwt_secret: str` with no default, and migrations/env.py
+      # calls get_settings() at import — so without this every step from
+      # `alembic upgrade head` onward dies on a pydantic ValidationError and the
+      # test suite silently never runs. That was the state of this job from the
+      # commit that added JWT auth until it was noticed 13 commits later. A
+      # throwaway value is correct here: CI signs and verifies its own tokens
+      # within a single run and never shares a session with anything.
+      JWT_SECRET: ci-not-a-real-secret
 
     steps:
       - uses: actions/checkout@v4
