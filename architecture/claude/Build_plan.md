@@ -426,28 +426,43 @@ A **publicly usable, read-only research tool for the Nifty 500** in ~1 week:
 
 Each step = one committable, testable unit sized for Claude Pro limits: implement → test → fix → commit → next.
 
-**P0**
-1. Scaffold repo (git init, backend+frontend skeletons, docker-compose Postgres, CI).
-2. DB layer: `asset/instrument_map/company/industry/price_ohlcv/corporate_action` + Alembic migration.
-3. Provider abstraction interfaces + registry + `provider_fetch_log` + unit tests (no impls).
-4. **Upstox provider**: `UpstoxTokenManager` + instruments dump → seed `asset`/`instrument_map`; daily historical candles.
-5. **NSE Bhavcopy provider**: auth-free EOD spine + delivery% (fallback + delivery data).
-6. Corporate-action ingestion + price adjustment (with tests — correctness-critical).
-7. Indicator engine (DMA 20/50/100/200, RSI, MACD, volatility, drawdown, rel-strength/volume) — pure + unit-tested.
-8. API: search + company page (prices + technicals).
-9. Frontend: design tokens, layout, search, company page (price chart + technical panel + provenance affordance).
-10. FundamentalDataProvider (best-effort) + financial panels **with coverage/confidence flags**.
-11. NewsProvider (RSS/GDELT) + dedup + news panel.
-12. Opportunity screens (Layer 1) + `/opportunities` + Finder UI.
-13. Scoring engine (configurable, missing-data-graceful, peer-normalized) + breakdown UI + **input snapshotting**.
-14. Attention ranking (Layer 2).
-15. Deploy: Vercel (fe) + Render/Fly (be) + Supabase/Neon (db) + scheduled ingestion. **→ Public MVP.**
+> **Status legend:** ✅ done · ⚠️ code done, blocked operationally · ❌ not started.
+> Last updated 2026-08-26 (commit `88438e5`). Live inventory in `SUMMARISER.md` §4.
 
-**P1 (each a spec in `docs/features/`)**
-16. Auth. 17. Portfolio + Zerodha CSV import. 18. Watchlist. 19. AI single-company analysis (grounded + cited). 20. **Thesis Tracker** (see §X).
+**P0 — complete**
+1. ✅ Scaffold repo (git init, backend+frontend skeletons, docker-compose Postgres, CI).
+2. ✅ DB layer: `asset/instrument_map/company/industry/price_ohlcv/corporate_action` + Alembic migration.
+3. ✅ Provider abstraction interfaces + registry + `provider_fetch_log` + unit tests (no impls).
+4. ✅ **Upstox provider**: `UpstoxTokenManager` + instruments dump → seed `asset`/`instrument_map`; daily historical candles. *(Token refresh stays semi-manual by design — §U.2.)*
+5. ✅ **NSE Bhavcopy provider**: auth-free EOD spine + delivery% (fallback + delivery data).
+6. ✅ Corporate-action ingestion + price adjustment (with tests — correctness-critical). *(Splits and bonuses only; the source feed misses bonuses and demergers — new risk §U.11.)*
+7. ✅ Indicator engine (DMA 20/50/100/200, RSI, MACD, volatility, drawdown, rel-strength/volume) — pure + unit-tested.
+8. ✅ API: search + company page (prices + technicals).
+9. ✅ Frontend: design tokens, layout, search, company page (price chart + technical panel + provenance affordance).
+10. ✅ FundamentalDataProvider (best-effort) + financial panels **with coverage/confidence flags**.
+11. ✅ NewsProvider (RSS) + dedup + news panel. *(GDELT not wired; `event_type` is unpopulated — §U.8.)*
+12. ✅ Opportunity screens (Layer 1) + `/opportunities` + Finder UI — 10 registered screens.
+13. ✅ Scoring engine (configurable, missing-data-graceful) + breakdown UI + **input snapshotting**. *(Peer normalization is still outstanding — §X.4.)*
+14. ✅ Attention ranking (Layer 2).
+15. ⚠️ Deploy: Vercel (fe) + Render/Fly (be) + Supabase/Neon (db) + scheduled ingestion. **Runbook written (`Deployment.md`) and the full container stack proven locally; not yet executed against a public host.** No public URL exists. Checklist in `SUMMARISER.md` §8.1.
 
-**P2**
-21. Historical event/recovery engine (needs deep-history strategy — see §U). 22. Advanced combinable screener. 23. Full industry scoring profiles. 24. Intelligent alerts (incl. thesis triggers). 25. NL research assistant. 26. Score backtesting. 27. Upstox intraday/WebSocket.
+**P1 — complete**
+16. ✅ Auth (JWT + refresh tokens, httpOnly cookies).
+17. ✅ Portfolio + Zerodha CSV import — **extended beyond spec to multi-broker consolidation** (Zerodha + Upstox in one view, uniqueness `(user, asset, broker)`).
+18. ✅ Watchlist.
+19. ⚠️ AI single-company analysis (grounded + cited) — code complete and hardened; **blocked at runtime by a restricted Gemini key** (§U.12).
+20. ✅ **Thesis Tracker** (see §X.1).
+— ✅ Provenance UI polish.
+
+**P2 — 4 of 7 done**
+21. ✅ Historical event/recovery engine — see §X.6. *(§U.3's deep-history blocker is now resolved.)*
+22. ✅ Advanced combinable screener — full AND/OR condition tree over a 28-metric registry.
+23. ✅ Full industry scoring profiles — 2 profiles seeded (`default`, `financials`); others deliberately refused on measured evidence, see `app/engines/scoring/registry.py`.
+24. ✅ Intelligent alerts (incl. thesis triggers).
+25. ❌ NL research assistant — **blocked** on the same Gemini key (§U.12). Design and tool surface already exist.
+26. ❌ Score backtesting.
+27. ❌ Upstox intraday/WebSocket — needs API access.
+— ❌ Peer-percentile normalization (§X.4).
 
 ---
 
@@ -474,7 +489,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 | Portfolio + Zerodha CSV (P1) | M | format variance |
 | AI analysis + grounding (P1) | **L** | citation/grounding correctness |
 | **Thesis Tracker (P1)** | **M** | trigger DSL + eval job + alerts |
-| Historical event engine (P2) | **L** | needs multi-year daily history |
+| Historical event engine (P2) | **L** | ✅ built 2026-08-26; the multi-year history prerequisite is now satisfied (§U.3) |
 
 ---
 
@@ -482,42 +497,54 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 
 1. **Fundamentals data (highest risk).** No reliable free API with good Indian coverage; obvious sources violate ToS. Upstox does **not** help here. → MVP partial + flagged; consider curated seed; XBRL later.
 2. **Upstox daily token expiry.** Unattended jobs break when the token lapses. → `UpstoxTokenManager` + **Bhavcopy as the auth-free guaranteed spine**; automate OAuth refresh if feasible.
-3. **Upstox daily-history 1-year cap + single-instrument requests.** Deep history for the P2 event engine isn't available on demand. → **accumulate daily bars from day 1**, backfill via bhavcopy/weekly; throttle 500-call ingestion.
+3. ~~**Upstox daily-history 1-year cap + single-instrument requests.**~~ **RESOLVED 2026-08-26.** The mitigation worked: `app.jobs.backfill_history` (Bhavcopy, committed monthly chunks) plus daily accumulation now holds **2021-08-25 → 2026-08-26 for all 500 active equities, averaging 1,078 bars each (984,796 rows)**. Step 21 was built on this and needs no on-demand deep fetch — `get_price_history` clamps any live refetch to 10 days regardless (`MAX_ON_DEMAND_FETCH_DAYS`).
 4. **Bhavcopy/NSE format drift & scrape-hostility.** → resilient parsers + monitoring via `provider_fetch_log`.
 5. **Free-tier hosting limits** (cold starts, job-time caps, DB row/connection limits). → EOD batch, lean storage.
 6. **Corporate-action correctness.** Wrong adjustment silently corrupts every indicator/return. → dedicated tests.
 7. **AI hallucination / over-claiming.** → strict grounding, citations, facts/interpretation split, banned-phrase guard.
 8. **News dedup/relevance quality.** → hashing + relevance scoring; accept modest recall in MVP.
 9. **One-week timeline vs data plumbing reality.** Ingestion/quality is the long pole, not UI.
-10. **Regulatory (SEBI).** Research-analyst rules are stricter than a generic disclaimer. → deliberate "education/research, not advice" positioning + disclaimer; log the decision.
+10. **Regulatory (SEBI).** Research-analyst rules are stricter than a generic disclaimer. → deliberate "education/research, not advice" positioning + disclaimer; log the decision. *(Disclaimer copy is live in the UI; the formal positioning sign-off in §V.6 is still open.)*
+
+11. **Corporate-action feed is incomplete — NEW, 2026-08-26, and the highest-impact live data bug.** The adjustment engine is correct, but `yfinance_actions` **misses bonus issues and demergers entirely**, so a mechanical price drop is carried through as a real fall. Measured: BAJFINANCE −79.9% (2025-06-16, 4:1 bonus absent), ABFRL −66.6% (demerger, no non-dividend action on file), VEDL −64.9% (demerger), 360ONE −50.3% (raw 1773.30 → 441.05, a 4× move with only a 2× split recorded), BAJAJFINSV −47.9%, SIEMENS −42.9%. Of 1,306 detected falls, 32 (2.5%) contain a session ≤ −20%. This corrupts **every** price-derived number for those names in those windows — DMAs, RSI, volatility, drawdown, the `down_*` screens, `technical_setup`, and the chart. → Step 21 exposes the tell (`worst_session_pct`) rather than suppressing it, which is how this was found. **Real fix needs a source that reports bonuses and demergers (NSE's own corporate-actions endpoint).** Note §6 was about *wrong* adjustment; this is about *missing input*, and the tests for §6 cannot catch it.
+
+12. **AI provider key restricted — NEW, blocks steps 19 (runtime) and 25.** The Gemini key lists models fine (200 in ~0.6 s) but `generateContent` hangs or returns an empty-bodied 404, identically from host and container, with Google's own server headers. A Cloud-console API-key restriction, not a code/network/model problem. → Failure path hardened (bounded 45 s budget, `provider_fetch_log` recording, 10-minute negative cache, auth gate, real error text surfaced). Console fix documented in `SUMMARISER.md` §8.2.
+
+13. **No rate limiter exists — NEW.** The auth gate is currently the only bound on abuse for `POST /screener/run` and `POST /ai-summary`. Must be closed before a public deploy.
 
 ---
 
 ## V. Questions That MUST Be Resolved Before Coding
 
-1. **Fundamentals for MVP:** partial-flagged / curated Nifty 500 dataset / defer to P1? *(biggest decision — Upstox does not solve this.)*
-2. **Upstox token strategy:** automated OAuth+TOTP refresh vs semi-manual daily paste vs Upstox-as-enrichment-only with Bhavcopy spine? *(Recommend: Bhavcopy spine + automate Upstox when feasible.)*
-3. **DB/host:** Supabase (Postgres + free Auth, speeds P1) vs Neon (pure Postgres)?
-4. **Backend host:** Render vs Fly.io vs Railway (free-tier + job scheduling tradeoffs).
-5. **AI provider + hard monthly cost cap.**
-6. **SEBI positioning stance + disclaimer copy** before public launch.
-7. **"~1 week" definition:** include fundamentals plumbing, or is prices+technicals+news+opportunity acceptable for v1 (fundamentals following)?
-8. **Confirm EOD-only** for MVP (strongly recommended; intraday via Upstox is P2).
-9. **Deep-history backfill:** start accumulating Upstox daily bars now, or source a one-time multi-year backfill for the P2 event engine?
+*Answers recorded as they were settled. Updated 2026-08-26.*
+
+1. ✅ **Fundamentals for MVP:** **partial + explicitly flagged.** One provider (yfinance), always rendered at low confidence, missing fields omitted rather than estimated. Remains the project's biggest data weakness (§U.1); XBRL is the real fix.
+2. ✅ **Upstox token strategy:** **Bhavcopy spine + semi-manual Upstox re-auth.** `UpstoxTokenManager` is in-memory and never stores password/PIN/TOTP. Two standing consequences: the token dies daily ~03:30 IST, **and every backend restart or redeploy clears it**. Automating it means a DB-backed token store — deliberately out of scope.
+3. ⬜ **DB/host:** still open. Either works; see `Deployment.md` §1 for the pooled-vs-direct connection-string distinction that matters on Supabase.
+4. ⬜ **Backend host:** still open. Both Render and Fly build `backend/Dockerfile` unchanged.
+5. ✅ **AI provider + cost cap:** **Gemini free tier**, with the cap enforced structurally rather than by budget alarm — generation is click-triggered only (never a page load or a schedule), and a shared `source_hash` cache means one generation per company per "the underlying data actually changed". Cost is ₹0 by construction. *(The key itself is currently restricted — §U.12.)*
+6. ⬜ **SEBI positioning stance:** disclaimer copy is live in the UI footer and `product_principles.md` fixes the approved/banned language, but the formal research-analyst positioning has **not** been signed off. Must close before a public launch.
+7. ✅ **"~1 week" definition:** moot — fundamentals plumbing shipped inside P0 (step 10) rather than following it.
+8. ✅ **Confirm EOD-only for MVP:** yes. Live-ish quotes come from `yfinance_quotes` on the company page and market overview; everything analytical is end-of-day. Intraday/WebSocket remains step 27.
+9. ✅ **Deep-history backfill:** **accumulate + Bhavcopy backfill**, and it worked — 5 years × 500 companies, 984,796 bars. See §U.3.
 
 ---
 
 ## W. Definition of Done — MVP
 
-- [ ] Public URL loads a clean, fast company page for any Nifty 500 stock.
-- [ ] Price chart renders **corporate-action-adjusted candlesticks** (Upstox primary, Bhavcopy fallback) with **visible split/bonus/dividend markers on ex-dates**; core technicals computed locally and correct (unit-tested).
-- [ ] Fundamentals shown where available, **explicitly flagged** where not — **no fabricated numbers.**
-- [ ] Relevant, deduplicated news per company.
-- [ ] Opportunity Finder returns ranked candidates for standard screens over the Nifty 500.
-- [ ] Opportunity Score displays with a **per-component breakdown**; missing data graceful; labeled "research characteristics," not a return prediction.
-- [ ] Daily ingestion runs unattended; **pipeline does not break if the Upstox token lapses** (Bhavcopy spine); pages served from stored data (no per-refresh API storms).
-- [ ] Every fact-bearing datapoint carries `source` + `as_of`; provenance visible in UI.
-- [ ] No secrets in repo or frontend; sensitive/admin endpoints rate-limited + gated.
+*Checked 2026-08-26. Everything is met **except the public URL** — the stack
+is verified end-to-end on `localhost:3100` against the real 500-company
+database, but has never been hosted.*
+
+- [ ] **Public URL** loads a clean, fast company page for any Nifty 500 stock. — **the one outstanding item.** Locally: ✅. Hosting checklist in `SUMMARISER.md` §8.1.
+- [x] Price chart renders **corporate-action-adjusted candlesticks** (Upstox primary, Bhavcopy fallback) with **visible split/bonus/dividend markers on ex-dates**; core technicals computed locally and correct (unit-tested). ⚠️ *Adjustment is correct but its input feed is incomplete — §U.11.*
+- [x] Fundamentals shown where available, **explicitly flagged** where not — **no fabricated numbers.**
+- [x] Relevant, deduplicated news per company.
+- [x] Opportunity Finder returns ranked candidates for standard screens over the Nifty 500.
+- [x] Opportunity Score displays with a **per-component breakdown**; missing data graceful; labeled "research attractiveness," not a return prediction.
+- [x] Daily ingestion runs unattended (APScheduler, 20:00 IST, 7 days a week); **pipeline does not break if the Upstox token lapses** (Bhavcopy spine); pages served from stored data.
+- [x] Every fact-bearing datapoint carries `source` + `as_of`; provenance visible in UI via `ProvenanceBadge`.
+- [~] No secrets in repo or frontend; admin endpoints gated. ⚠️ **Gated but NOT rate-limited — no rate limiter exists anywhere (§U.13).** Close before going public.
 - [ ] CI green (lint + tests); README explains local setup incl. Upstox token bootstrap.
 - [ ] Disclaimer / positioning copy present.
 
@@ -551,7 +578,25 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 
 ### X.5 Provider-Health Monitoring *(baked into P0 via `provider_fetch_log`)*
 - Track per-provider success/latency/staleness → early warning when a free source (Upstox token, Bhavcopy format) breaks.
+- *Live lesson (2026-08-26): the one provider that never wrote to this table — the LLM — is the one whose total failure went unnoticed for days. `record_fetch` is now wired into the AI path, and the error row is `commit()`ed rather than flushed, because the exception that follows it reaches `get_db`, which rolls the request back.*
+
+### X.6 Historical Fall / Recovery Engine *(P2 step 21 — written after the build, 2026-08-26)*
+- **Purpose:** answer `founder_vision.md`'s "has something similar happened before, and what happened after?" for a company against its own past. `Screener.md` §10 calls it "an important differentiator" and §10:477-479 constrains it: *"Do NOT present historical recovery as a prediction. It is context only."*
+- **User problem:** a stock is down 40% and the reader has no way to tell whether this company has been here before, how long it took to come back, or whether it ever did.
+- **Inputs:** the company's full stored corporate-action-adjusted close series. No `range` parameter — the window belongs to the engine, not the reader.
+- **Outputs:** the current open fall (if any) with peak/trough/depth/duration/volatility/worst-session, plus up to 5 comparable past falls each with its recovery date and duration; `past_count`, `excluded_left_censored`, and an explicit `dimensions_compared` / `dimensions_unavailable` split.
+- **Business logic:** an *event* is an underwater episode — walk closes keeping a running peak; open on the first close **strictly below** it, close on the first close **at or above** it, trough = lowest close inside (first of ties). Keep episodes ≤ −20% (the conventional bear-market line, matching `down_90d`). At most one episode is open and it is necessarily the last. Comparables rank by `abs(past.decline_pct − current.decline_pct)` in percentage **points**.
+- **Three decisions that follow from "context, never a prediction":**
+  1. **No blended similarity score.** Only 3 of the spec's 7 dimensions are computable; a composite would overstate that, its weights would be unversioned code constants (which §L forbids), and a single "87% similar" is exactly the artifact that gets read as *this is the analog, so expect the analog's outcome*.
+  2. **No aggregate across episodes** — no median recovery time. A marginal new high can legitimately split one long fall into two: harmless for a dated list, wrong for a mean.
+  3. **No Python symbol named "event"** — `thesis_event` already owns that word. Package `engines/historical/`, types `Episode`/`Comparable`, service `historical_episodes.py`. The URL keeps §C's user-facing word.
+- **Data:** **no new table.** Deliberately recomputed per request: `recovered`/`recovery_date` change as bars arrive, and a past fall's magnitude changes *retroactively* when a missing split is discovered and the series is re-adjusted — a cached row would disagree with the chart above it on the same page. Reads all stored history (not a rolling window, which would make the reported past mutate daily); one index range scan on `price_ohlcv`'s `(asset_id, date)` PK, ~33 ms warm.
+- **API:** `GET /companies/{symbol}/historical-events`, standard provenance envelope, `source = price_source`, `confidence = "low"` when there is no data or the current fall is left-censored.
+- **UI:** `HistoricalEventsPanel` between Technicals and the AI summary. Current-fall stat strip, comparables table, a data-quality strip, and a footnote carrying three non-negotiable clauses: "not a forecast"; "history begins X, not its listing date"; "magnitude, duration and volatility only — not the reasons".
+- **Edge cases:** left-censored falls (peak = first bar) are flagged, excluded from comparables, and counted; non-positive closes skipped; ETFs return empty (our actions source doesn't track unit consolidations); an ongoing fall reports `decline_pct` (peak→trough) *and* `current_drawdown_pct` (peak→latest) separately, with `trough_to_recovery_*` as `None` rather than "days so far"; `trough_is_latest_bar` flags a stock still making new lows. `worst_session_pct` is the tell for an unadjusted corporate action and is surfaced, not suppressed — which is how §U.11 was discovered.
+- **Acceptance:** ADANIENT reports −71.3% over 69 days from its 2022-12-20 peak, unrecovered; TCS shows its 2022 −25.8% fall recovering after 501 days alongside the current one; a stock near its high shows `current: null` with past falls still listed. All verified live.
 
 ---
 
-*End of build plan (v2). Awaiting review/approval before any implementation. Features will be built one-at-a-time with docs as the source of truth.*
+*Build plan v2, kept current with the build. Status markers in §S; risks and
+resolutions in §U; live inventory and handover in `SUMMARISER.md`.*

@@ -241,3 +241,7 @@ architecture/.DS_Store
 
 # Claude Code local tool state (launch.json holds machine-specific paths)
 .claude/
+
+# Intentional local database backups — kept on disk on purpose, never committed.
+backend/data.sql
+backend/data copy.sql
