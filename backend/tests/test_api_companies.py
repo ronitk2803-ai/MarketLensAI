@@ -464,3 +464,56 @@ def test_post_ai_summary_reaches_the_service_when_authenticated(
 
     assert response.status_code == 200
     assert response.json()["data"]["summary"] == "a generated summary"
+
+
+def test_get_historical_events_reports_no_current_fall_without_enough_history(
+    seeded_asset: Asset,
+) -> None:
+    """_stub_external_calls seeds 2 bars a rupee apart — no 20% fall exists,
+    and the endpoint must say so rather than manufacture one."""
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/historical-events")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["current"] is None
+    assert body["data"]["comparable"] == []
+    assert body["data"]["past_count"] == 0
+    assert body["data"]["min_decline_pct"] == 20.0
+    # The four dimensions we can't compare are declared, not silently dropped.
+    assert "fundamentals" in body["data"]["dimensions_unavailable"]
+
+
+def test_get_historical_events_returns_current_and_comparables(
+    seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    today = dt.date.today()
+    closes = [95, 100, 60, 105, 63, 110, 66]
+    bars = [
+        Bar(
+            date=today - dt.timedelta(days=len(closes) - 1 - i),
+            open=c,
+            high=c,
+            low=c,
+            close=float(c),
+            volume=1000,
+        )
+        for i, c in enumerate(closes)
+    ]
+    monkeypatch.setattr(NSEBhavcopyProvider, "get_ohlcv", lambda *a, **k: bars)
+
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/historical-events")
+    assert response.status_code == 200
+    data = response.json()["data"]
+
+    assert data["current"]["decline_pct"] == pytest.approx(-40.0)
+    assert data["current"]["recovered"] is False
+    assert data["current"]["trough_is_latest_bar"] is True
+    assert data["past_count"] == 2
+    assert len(data["comparable"]) == 2
+    assert all(row["recovered"] for row in data["comparable"])
+    assert data["comparable"][0]["decline_gap_pp"] == pytest.approx(0.0)
+    assert data["history_start"] == str(bars[0].date)
+
+
+def test_get_historical_events_404_for_unknown_symbol() -> None:
+    response = client.get("/api/v1/companies/NOSUCHSYMBOL/historical-events")
+    assert response.status_code == 404

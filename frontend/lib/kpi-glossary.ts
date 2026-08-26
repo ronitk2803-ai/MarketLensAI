@@ -70,6 +70,8 @@ export const KPI_GLOSSARY: Record<string, string> = {
     "Where the price sits relative to its own recent trading range: a deeper drawdown from the recent peak combined with a lower (more \"oversold\") RSI scores higher here — this component rewards a beaten-down setup, not a strong one. It reads the chart, not the business.",
   participation:
     "How much trading interest the stock has seen lately: volume relative to its own 20-day average, and the share of that volume settled as actual delivery (not intraday trading). Higher scores mean more — and more \"real\" — market interest, not a judgment on where the price goes next.",
+  historical_fall:
+    "A stretch where the stock closed 20% or more below its own running peak, measured on corporate-action-adjusted closes. It starts at that peak, bottoms at its lowest close, and ends the first day the price closes back at the peak — so \"recovered\" means it got back to where it was, which is what someone who bought at the top actually experienced. A fall still in progress has no recovery time; it is shown as ongoing rather than as a slow recovery. Past falls are listed as a record of what happened, not an indication of what will.",
 };
 
 export function kpiDescription(metric: string): string | undefined {

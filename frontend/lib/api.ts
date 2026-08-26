@@ -163,6 +163,65 @@ export interface Technicals {
   series: TechnicalSeries;
 }
 
+/**
+ * One peak -> trough -> recovery fall in a company's own adjusted price
+ * history. Units are load-bearing: `*_pct` fields are a PERCENT and
+ * negative, `fall_volatility` is a FRACTION (annualized — same unit as
+ * TechnicalSnapshot.volatility20, which the same page renders), `*_days`
+ * are CALENDAR days and `*_sessions` are trading bars.
+ */
+export interface HistoricalEpisode {
+  peak_date: string;
+  peak_close: number;
+  trough_date: string;
+  trough_close: number;
+  recovery_date: string | null;
+  recovery_close: number | null;
+  decline_pct: number;
+  peak_to_trough_days: number;
+  peak_to_trough_sessions: number;
+  trough_to_recovery_days: number | null;
+  trough_to_recovery_sessions: number | null;
+  fall_volatility: number | null;
+  /** Largest single-session drop inside the fall — the tell for a
+   *  mechanical drop (rights issue, demerger) that price adjustment
+   *  deliberately doesn't cover. */
+  worst_session_pct: number;
+  worst_session_date: string;
+  recovered: boolean;
+  /** The peak is the first bar we hold, so the fall was already underway
+   *  when this history begins and the magnitude is a lower bound. */
+  left_censored: boolean;
+}
+
+export interface CurrentHistoricalEpisode extends HistoricalEpisode {
+  /** PERCENT, negative — peak to the LATEST close. Shallower than
+   *  decline_pct whenever the stock has bounced off its trough. */
+  current_drawdown_pct: number;
+  /** The lowest close so far IS the latest bar — no bottom has formed. */
+  trough_is_latest_bar: boolean;
+}
+
+export interface ComparableHistoricalEpisode extends HistoricalEpisode {
+  /** Percentage POINTS from the current fall's depth — the sort key,
+   *  returned so the ordering is auditable rather than implicit. Null when
+   *  there is no current fall to measure against. */
+  decline_gap_pp: number | null;
+}
+
+export interface HistoricalEvents {
+  as_of: string | null;
+  history_start: string | null;
+  min_decline_pct: number;
+  current: CurrentHistoricalEpisode | null;
+  comparable: ComparableHistoricalEpisode[];
+  /** Every past fall over the threshold, before exclusions and the cap. */
+  past_count: number;
+  excluded_left_censored: number;
+  dimensions_compared: string[];
+  dimensions_unavailable: string[];
+}
+
 export interface RatioValue {
   metric: string;
   value: number;
@@ -390,6 +449,17 @@ export function getTechnicals(symbol: string, range: PriceRange = "1y") {
   return apiFetch<Technicals>(`/companies/${encodeURIComponent(symbol)}/technicals?range=${range}`, {
     next: { revalidate: 60 },
   });
+}
+
+/** No range parameter by design: "has this happened before?" must not
+ *  change its answer because someone clicked a different chart tab.
+ *  Revalidated hourly rather than by the minute — an episode only changes
+ *  when a new end-of-day bar lands. */
+export function getHistoricalEvents(symbol: string) {
+  return apiFetch<HistoricalEvents>(
+    `/companies/${encodeURIComponent(symbol)}/historical-events`,
+    { next: { revalidate: 3600 } },
+  );
 }
 
 

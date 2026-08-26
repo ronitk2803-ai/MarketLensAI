@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.models import AppUser, Asset
 from app.db.session import get_db
+from app.engines.historical import DIMENSIONS_COMPARED, DIMENSIONS_UNAVAILABLE, Episode
 from app.providers.errors import ProviderError
 from app.services.adjusted_prices import get_adjusted_bars
 from app.services.company_summary import generate_summary, get_cached_summary
@@ -21,6 +22,7 @@ from app.services.fundamentals import (
     get_or_fetch_statements,
     get_sector_ratio_stats,
 )
+from app.services.historical_episodes import get_historical_falls
 from app.services.news import get_or_fetch_news
 from app.services.scoring import gather_score_inputs, get_or_compute_score
 from app.services.search import search_assets
@@ -353,4 +355,71 @@ def get_technicals(
         },
     }
     confidence = "high" if s.close is not None else "low"
+    return _envelope(data, source=result.price_source, confidence=confidence)
+
+
+@router.get("/companies/{symbol}/historical-events")
+def get_historical_events(symbol: str, db: Session = Depends(get_db)) -> dict:
+    """Past falls of 20%+ in this company's own history, and how they ended.
+
+    Takes no `range` — unlike /prices and /technicals, the window here is
+    the engine's, not the reader's: "has this happened before?" must not
+    change its answer because someone clicked a different chart tab.
+    """
+    asset = _get_asset_or_404(db, symbol)
+    result = get_historical_falls(db, asset)
+
+    def _episode(episode: Episode) -> dict:
+        return {
+            "peak_date": episode.peak_date,
+            "peak_close": episode.peak_close,
+            "trough_date": episode.trough_date,
+            "trough_close": episode.trough_close,
+            "recovery_date": episode.recovery_date,
+            "recovery_close": episode.recovery_close,
+            "decline_pct": episode.decline_pct,
+            "peak_to_trough_days": episode.peak_to_trough_days,
+            "peak_to_trough_sessions": episode.peak_to_trough_sessions,
+            "trough_to_recovery_days": episode.trough_to_recovery_days,
+            "trough_to_recovery_sessions": episode.trough_to_recovery_sessions,
+            "fall_volatility": episode.fall_volatility,
+            "worst_session_pct": episode.worst_session_pct,
+            "worst_session_date": episode.worst_session_date,
+            "recovered": episode.recovered,
+            "left_censored": episode.left_censored,
+        }
+
+    current = result.current
+    data = {
+        "as_of": result.as_of,
+        "history_start": result.history_start,
+        "min_decline_pct": result.min_decline_pct,
+        "current": (
+            {
+                **_episode(current.episode),
+                "current_drawdown_pct": current.current_drawdown_pct,
+                "trough_is_latest_bar": current.trough_is_latest_bar,
+            }
+            if current is not None
+            else None
+        ),
+        "comparable": [
+            {**_episode(c.episode), "decline_gap_pp": c.decline_gap_pp}
+            for c in result.comparable
+        ],
+        "past_count": result.past_count,
+        "excluded_left_censored": result.excluded_left_censored,
+        # Declared rather than implied: only three of Screener.md §10's
+        # seven comparison dimensions are derivable from the data we hold,
+        # and the reader is entitled to know which four aren't.
+        "dimensions_compared": list(DIMENSIONS_COMPARED),
+        "dimensions_unavailable": list(DIMENSIONS_UNAVAILABLE),
+    }
+    # A fall whose peak is the first bar we hold has a magnitude that's only
+    # a lower bound, so the whole answer is weaker than it looks.
+    confidence = (
+        "low"
+        if result.as_of is None or (current is not None and current.episode.left_censored)
+        else "high"
+    )
     return _envelope(data, source=result.price_source, confidence=confidence)

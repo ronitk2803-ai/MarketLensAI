@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 
 import { AiSummaryPanel } from "@/components/domain/AiSummaryPanel";
 import { FundamentalsPanel } from "@/components/domain/FundamentalsPanel";
+import { HistoricalEventsPanel } from "@/components/domain/HistoricalEventsPanel";
 import { LivePrice } from "@/components/domain/LivePrice";
 import { NewsPanel } from "@/components/domain/NewsPanel";
 import { PriceChartPanel } from "@/components/domain/PriceChartPanel";
@@ -16,6 +17,7 @@ import {
   getCompany,
   getCorporateActions,
   getFundamentals,
+  getHistoricalEvents,
   getNews,
   getPrices,
   getScore,
@@ -52,17 +54,27 @@ export default async function CompanyPage({
 
   // Generating a summary spends an LLM call, so the backend gates it
   // behind sign-in; the page itself stays public.
-  const [prices, technicals, corporateActions, fundamentals, news, score, aiSummary, user] =
-    await Promise.all([
-      getPrices(symbol, range),
-      getTechnicals(symbol, range),
-      getCorporateActions(symbol),
-      getFundamentals(symbol),
-      getNews(symbol),
-      getScore(symbol),
-      getAiSummary(symbol),
-      getSignedInUser(),
-    ]);
+  const [
+    prices,
+    technicals,
+    corporateActions,
+    fundamentals,
+    news,
+    score,
+    aiSummary,
+    historicalEvents,
+    user,
+  ] = await Promise.all([
+    getPrices(symbol, range),
+    getTechnicals(symbol, range),
+    getCorporateActions(symbol),
+    getFundamentals(symbol),
+    getNews(symbol),
+    getScore(symbol),
+    getAiSummary(symbol),
+    getHistoricalEvents(symbol),
+    getSignedInUser(),
+  ]);
 
   const header = company.data;
   const changePct = header.latest_price.change_pct;
@@ -153,6 +165,15 @@ export default async function CompanyPage({
       </div>
 
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
+
+      {/* Sits next to Drawdown, the metric it extends, and above the AI
+          summary — which should eventually be able to cite it. */}
+      <HistoricalEventsPanel
+        symbol={header.symbol}
+        events={historicalEvents.data}
+        meta={historicalEvents.meta}
+        corporateActions={corporateActions.data}
+      />
 
       <AiSummaryPanel
         symbol={header.symbol}
