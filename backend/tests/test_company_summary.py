@@ -1,13 +1,22 @@
-"""Unit tests for the prompt-building and cache-fingerprint logic in
-company_summary.py. No DB/network fixtures needed — `_build_prompt` and
-`_source_hash` are pure functions of the dataclasses/lists passed in, so
-constructing those directly (not persisting them) is enough."""
+"""Tests for company_summary.py.
+
+The prompt-building and cache-fingerprint tests need no DB/network
+fixtures — `_build_prompt` and `_source_hash` are pure functions of the
+dataclasses/lists passed in, so constructing those directly (not
+persisting them) is enough. The provider-health and cooldown tests at the
+bottom are DB-backed, since the whole point of those is what gets written
+to provider_fetch_log."""
 
 import datetime as dt
 
-from app.db.models import FinancialMetric, NewsArticle
+import pytest
+from sqlalchemy.orm import Session
+
+from app.db.models import Asset, FinancialMetric, NewsArticle, ProviderFetchLog
 from app.domain.models import AssetRef
 from app.engines.scoring.base import ScoreInputs
+from app.providers.errors import ProviderError
+from app.services import company_summary as cs
 from app.services.company_summary import _build_prompt, _source_hash
 
 ASSET = AssetRef(symbol="ZZAI1", exchange="NSE", market="IN")
@@ -130,3 +139,214 @@ def test_source_hash_is_stable_for_identical_inputs() -> None:
     second = _source_hash(news, ratios, FULL_INPUTS, 1300.0)
 
     assert first == second
+
+
+# --- Provider-health logging and the failure cooldown (DB-backed) ---
+#
+# The reason a completely dead LLM went unnoticed for days: the one
+# provider that never wrote to provider_fetch_log was the one that broke.
+# These pin that it now does, and that a broken provider isn't re-probed on
+# every click.
+
+
+# generate_summary commits on the failure path so the provider-health row
+# survives get_db's rollback — which means an asset created by a
+# failure-path test is committed too, and the usual rollback-only `db`
+# fixture can't undo it. Same situation, and same remedy, as
+# test_daily_ingestion.py's teardown.
+_COMMITTING_TEST_SYMBOLS = ("ZZAIFAIL", "ZZAICOMMIT")
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_committed_rows(db: Session):
+    yield
+    db.rollback()
+    asset_ids = [
+        row[0]
+        for row in db.query(Asset.id)
+        .filter(Asset.symbol.in_(_COMMITTING_TEST_SYMBOLS))
+        .all()
+    ]
+    if asset_ids:
+        db.query(ProviderFetchLog).filter(
+            ProviderFetchLog.asset_id.in_(asset_ids)
+        ).delete(synchronize_session=False)
+        db.query(Asset).filter(Asset.id.in_(asset_ids)).delete(synchronize_session=False)
+        db.commit()
+
+
+def _asset(db: Session, symbol: str) -> Asset:
+    asset = Asset(symbol=symbol, exchange="NSE", market="IN", name=f"{symbol} Ltd.")
+    db.add(asset)
+    db.flush()
+    return asset
+
+
+def _stub_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Everything generate_summary gathers before it reaches the provider."""
+    monkeypatch.setattr(cs, "get_or_fetch_ratios", lambda db, asset: [])
+    monkeypatch.setattr(cs, "get_or_fetch_news", lambda db, asset: [])
+    monkeypatch.setattr(cs, "get_adjusted_bars", lambda db, asset, lookback_days: ([], "test"))
+    monkeypatch.setattr(cs, "gather_score_inputs", lambda db, asset: ScoreInputs())
+
+    class _Settings:
+        gemini_api_key = "test-key"
+
+    monkeypatch.setattr(cs, "get_settings", lambda: _Settings())
+
+
+def _fetch_rows(db: Session, asset_id: int) -> list[ProviderFetchLog]:
+    return (
+        db.query(ProviderFetchLog)
+        .filter_by(asset_id=asset_id, endpoint=cs.AI_SUMMARY_ENDPOINT)
+        .all()
+    )
+
+
+def test_a_successful_generation_is_recorded_as_provider_health(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = _asset(db, "ZZAIOK")
+    _stub_inputs(monkeypatch)
+    monkeypatch.setattr(
+        cs.GeminiSummaryProvider, "generate", lambda self, prompt: "a summary"
+    )
+
+    cs.generate_summary(db, asset)
+
+    rows = _fetch_rows(db, asset.id)
+    assert [r.status for r in rows] == ["success"]
+    assert rows[0].provider == "gemini_summary"
+
+
+def test_a_failed_generation_is_recorded_and_the_error_still_propagates(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = _asset(db, "ZZAIFAIL")
+    _stub_inputs(monkeypatch)
+
+    def boom(self: object, prompt: str) -> str:
+        raise ProviderError("gemini_summary", "request failed: timed out", retryable=True)
+
+    monkeypatch.setattr(cs.GeminiSummaryProvider, "generate", boom)
+
+    with pytest.raises(ProviderError, match="request failed"):
+        cs.generate_summary(db, asset)
+
+    assert [r.status for r in _fetch_rows(db, asset.id)] == ["error"]
+
+
+def test_a_recent_failure_short_circuits_without_calling_the_provider(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken provider costs the full retry budget per call. Without this
+    the cost is paid again on every single click."""
+    asset = _asset(db, "ZZAICOOL")
+    _stub_inputs(monkeypatch)
+    db.add(
+        ProviderFetchLog(
+            provider="gemini_summary",
+            endpoint=cs.AI_SUMMARY_ENDPOINT,
+            asset_id=asset.id,
+            status="error",
+        )
+    )
+    db.flush()
+
+    calls = {"n": 0}
+
+    def counted(self: object, prompt: str) -> str:
+        calls["n"] += 1
+        return "a summary"
+
+    monkeypatch.setattr(cs.GeminiSummaryProvider, "generate", counted)
+
+    with pytest.raises(ProviderError, match="try again"):
+        cs.generate_summary(db, asset)
+
+    assert calls["n"] == 0  # never reached the network
+
+
+def test_an_old_failure_does_not_suppress_a_fresh_attempt(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = _asset(db, "ZZAIOLD")
+    _stub_inputs(monkeypatch)
+    stale = dt.datetime.now(dt.UTC) - cs.GENERATION_RETRY_COOLDOWN - dt.timedelta(minutes=1)
+    db.add(
+        ProviderFetchLog(
+            provider="gemini_summary",
+            endpoint=cs.AI_SUMMARY_ENDPOINT,
+            asset_id=asset.id,
+            status="error",
+            fetched_at=stale,
+        )
+    )
+    db.flush()
+    monkeypatch.setattr(
+        cs.GeminiSummaryProvider, "generate", lambda self, prompt: "a summary"
+    )
+
+    row = cs.generate_summary(db, asset)
+
+    assert row.summary == "a summary"
+
+
+def test_a_previous_success_never_suppresses_a_later_attempt(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cooldown is keyed on failure only — a successful generation is
+    already short-circuited by source_hash, so suppressing on success would
+    block a legitimate regeneration after the data changed."""
+    asset = _asset(db, "ZZAIPREV")
+    _stub_inputs(monkeypatch)
+    db.add(
+        ProviderFetchLog(
+            provider="gemini_summary",
+            endpoint=cs.AI_SUMMARY_ENDPOINT,
+            asset_id=asset.id,
+            status="success",
+        )
+    )
+    db.flush()
+    monkeypatch.setattr(
+        cs.GeminiSummaryProvider, "generate", lambda self, prompt: "fresh"
+    )
+
+    assert cs.generate_summary(db, asset).summary == "fresh"
+
+
+def test_the_failure_record_survives_the_request_rollback(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug the tests above missed. They use the rollback-scoped `db`
+    fixture and so never exercise get_db's exception path — but in a real
+    request the ProviderError propagates, get_db rolls back, and a merely
+    flushed log row disappears with it. Both the provider-health record and
+    the cooldown that reads it would then silently never exist. Asserted
+    from a *separate* session, which is the only way to tell a committed
+    row from a flushed one."""
+    from app.db.session import SessionLocal
+
+    asset = _asset(db, "ZZAICOMMIT")
+    db.commit()  # the asset has to be visible to the other session too
+    _stub_inputs(monkeypatch)
+
+    def boom(self: object, prompt: str) -> str:
+        raise ProviderError("gemini_summary", "request failed: timed out", retryable=True)
+
+    monkeypatch.setattr(cs.GeminiSummaryProvider, "generate", boom)
+
+    with pytest.raises(ProviderError):
+        cs.generate_summary(db, asset)
+
+    observer = SessionLocal()
+    try:
+        survived = (
+            observer.query(ProviderFetchLog)
+            .filter_by(asset_id=asset.id, endpoint=cs.AI_SUMMARY_ENDPOINT)
+            .all()
+        )
+    finally:
+        observer.close()
+    assert [r.status for r in survived] == ["error"]

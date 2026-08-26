@@ -17,23 +17,39 @@ fingerprint would produce essentially the same summary from the model, so
 the second call is a wasted (rate-limited) API call — skip it.
 """
 
+import datetime as dt
 import hashlib
+import time
 
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Asset, CompanyAiSummary, FinancialMetric, NewsArticle
+from app.db.models import (
+    Asset,
+    CompanyAiSummary,
+    FinancialMetric,
+    NewsArticle,
+    ProviderFetchLog,
+)
 from app.engines.scoring.base import ScoreInputs
 from app.providers.ai.gemini_summary import DEFAULT_MODEL, GeminiSummaryProvider
 from app.providers.errors import ProviderError
+from app.providers.fetch_log import record_fetch
 from app.services.adjusted_prices import get_adjusted_bars
 from app.services.fundamentals import get_or_fetch_ratios
 from app.services.news import get_or_fetch_news
 from app.services.scoring import gather_score_inputs
 
 SOURCE = "gemini_summary"
+AI_SUMMARY_ENDPOINT = "ai_summary_generate"
+
+# How long a failed generation suppresses further attempts for that asset.
+# Long enough that a broken provider isn't re-probed on every click, short
+# enough that a transient outage clears without anyone waiting it out.
+GENERATION_RETRY_COOLDOWN = dt.timedelta(minutes=10)
+
 _NEWS_FOR_HASH = 10
 _NEWS_FOR_PROMPT = 8
 
@@ -132,6 +148,25 @@ def get_cached_summary(db: Session, asset: Asset) -> CompanyAiSummary | None:
     return db.query(CompanyAiSummary).filter_by(asset_id=asset.id).one_or_none()
 
 
+def _recently_failed(db: Session, asset_id: int) -> bool:
+    """Whether the last generation attempt for this asset failed inside the
+    cooldown. Mirrors prices.py's _recently_attempted, but keyed on failure
+    only: a *successful* generation is already short-circuited by
+    source_hash, so there's nothing to suppress there."""
+    last = (
+        db.query(ProviderFetchLog)
+        .filter_by(asset_id=asset_id, endpoint=AI_SUMMARY_ENDPOINT)
+        .order_by(ProviderFetchLog.fetched_at.desc())
+        .first()
+    )
+    if last is None or last.status != "error":
+        return False
+    fetched_at = last.fetched_at
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=dt.UTC)
+    return (dt.datetime.now(dt.UTC) - fetched_at) < GENERATION_RETRY_COOLDOWN
+
+
 def generate_summary(db: Session, asset: Asset, *, force: bool = False) -> CompanyAiSummary:
     """User-triggered (the button). Cache-aware: only calls the LLM when
     there is no cached row yet, or the underlying data changed since the
@@ -155,8 +190,52 @@ def generate_summary(db: Session, asset: Asset, *, force: bool = False) -> Compa
     if not settings.gemini_api_key:
         raise ProviderError("gemini_summary", "GEMINI_API_KEY not configured")
 
+    # A provider that's down stays down for a while, and each failed call
+    # costs the full retry budget. Without this, every click on a broken
+    # provider pays that again — the same reasoning (and the same
+    # ProviderFetchLog-backed mechanism) as prices.py's _recently_attempted.
+    if _recently_failed(db, asset.id):
+        raise ProviderError(
+            "gemini_summary",
+            "a recent generation for this company failed — try again in a few minutes",
+            retryable=True,
+        )
+
     prompt = _build_prompt(asset, ratios, news, inputs, latest_close)
-    text = GeminiSummaryProvider(settings.gemini_api_key).generate(prompt)
+    started_at = time.monotonic()
+    try:
+        text = GeminiSummaryProvider(settings.gemini_api_key).generate(prompt)
+    except ProviderError:
+        # Logged before re-raising, so a dead provider is visible in
+        # provider_fetch_log (Build_plan.md §X.5's whole purpose) instead of
+        # only in whatever the user happened to see in the UI. This was the
+        # actual reason a completely non-functional LLM went unnoticed: the
+        # one provider that never recorded a fetch was the one that broke.
+        record_fetch(
+            db,
+            provider="gemini_summary",
+            endpoint=AI_SUMMARY_ENDPOINT,
+            status="error",
+            asset_id=asset.id,
+            latency_ms=round((time.monotonic() - started_at) * 1000),
+        )
+        # Committed here, not merely flushed, and this is the one place in
+        # this service that commits. The exception about to be raised
+        # reaches app/db/session.py's get_db, which rolls the request back
+        # — so a flushed-only row would vanish along with it, and both the
+        # provider-health record and the cooldown that depends on it would
+        # silently never exist. Verified live: without this the second
+        # click still paid the full retry budget.
+        db.commit()
+        raise
+    record_fetch(
+        db,
+        provider="gemini_summary",
+        endpoint=AI_SUMMARY_ENDPOINT,
+        status="success",
+        asset_id=asset.id,
+        latency_ms=round((time.monotonic() - started_at) * 1000),
+    )
 
     row = {
         "asset_id": asset.id,

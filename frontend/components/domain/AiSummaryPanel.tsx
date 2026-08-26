@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2, RefreshCw, Sparkles } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
@@ -79,10 +80,15 @@ export function AiSummaryPanel({
   symbol,
   initial,
   meta,
+  canGenerate,
 }: {
   symbol: string;
   initial: AiSummary | null;
   meta: Meta;
+  /** Generating spends an LLM call, so the backend requires sign-in for it
+   * (the app has no rate limiter). Reading a cached summary stays public,
+   * which is why this only gates the button and not the panel. */
+  canGenerate: boolean;
 }) {
   const [summary, setSummary] = useState(initial);
   const [loading, setLoading] = useState(false);
@@ -95,8 +101,14 @@ export function AiSummaryPanel({
       const res = await fetch(`/api/ai-summary?symbol=${encodeURIComponent(symbol)}`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error();
-      setSummary((await res.json()) as AiSummary);
+      const body = (await res.json()) as AiSummary & { error?: string };
+      if (!res.ok) {
+        // Show what actually went wrong. "Try again in a moment" is right
+        // for a blip and actively misleading for a misconfigured key.
+        setError(body.error ?? "Couldn't generate a summary right now — try again in a moment.");
+        return;
+      }
+      setSummary(body);
     } catch {
       setError("Couldn't generate a summary right now — try again in a moment.");
     } finally {
@@ -110,21 +122,25 @@ export function AiSummaryPanel({
       actions={
         summary && (
           <div className="flex items-center gap-3">
+            {/* The badge belongs to the cached summary, so it shows for
+                everyone; only regenerating spends a call. */}
             <ProvenanceBadge
               source={meta.source}
               asOf={summary.generated_at}
               confidence={meta.confidence}
             />
-            <button
-              type="button"
-              onClick={handleGenerate}
-              disabled={loading}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-              title="Regenerate — free unless something about the company changed"
-            >
-              <RefreshCw className={loading ? "size-3 animate-spin" : "size-3"} aria-hidden />
-              Regenerate
-            </button>
+            {canGenerate && (
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={loading}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                title="Regenerate — free unless something about the company changed"
+              >
+                <RefreshCw className={loading ? "size-3 animate-spin" : "size-3"} aria-hidden />
+                Regenerate
+              </button>
+            )}
           </div>
         )
       }
@@ -132,19 +148,29 @@ export function AiSummaryPanel({
     >
       {!summary ? (
         <div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium hover:bg-surface-raised/70 disabled:opacity-50"
-          >
-            {loading ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden />
-            ) : (
-              <Sparkles className="size-3.5" aria-hidden />
-            )}
-            {loading ? "Generating…" : "Generate AI summary"}
-          </button>
+          {canGenerate ? (
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium hover:bg-surface-raised/70 disabled:opacity-50"
+            >
+              {loading ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Sparkles className="size-3.5" aria-hidden />
+              )}
+              {loading ? "Generating…" : "Generate AI summary"}
+            </button>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              <Link href="/login" className="text-primary hover:underline">
+                Sign in
+              </Link>{" "}
+              to generate a summary. Summaries already generated for a company are visible to
+              everyone.
+            </p>
+          )}
           {error && <p className="text-xs text-down">{error}</p>}
         </div>
       ) : (

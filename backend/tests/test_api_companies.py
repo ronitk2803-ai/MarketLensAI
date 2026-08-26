@@ -422,3 +422,45 @@ def test_get_score_is_cached_within_the_same_day(seeded_asset: Asset) -> None:
     first = client.get(f"/api/v1/companies/{seeded_asset.symbol}/score").json()
     second = client.get(f"/api/v1/companies/{seeded_asset.symbol}/score").json()
     assert first["data"]["as_of"] == second["data"]["as_of"]
+
+
+# --- AI summary access control ---
+#
+# POST is the only endpoint in the app that can spend an LLM call, and
+# there is no rate limiter anywhere, so the auth gate is what bounds abuse.
+# GET only reads the cache and is free, so it stays public.
+
+
+def test_post_ai_summary_requires_authentication(seeded_asset: Asset) -> None:
+    response = client.post(f"/api/v1/companies/{seeded_asset.symbol}/ai-summary")
+    assert response.status_code == 401
+
+
+def test_get_ai_summary_stays_public(seeded_asset: Asset) -> None:
+    response = client.get(f"/api/v1/companies/{seeded_asset.symbol}/ai-summary")
+    assert response.status_code == 200
+    # Nothing generated yet for this asset, and a cache read must never
+    # trigger generation.
+    assert response.json()["data"] is None
+
+
+def test_post_ai_summary_reaches_the_service_when_authenticated(
+    seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services import company_summary as cs
+
+    monkeypatch.setattr(
+        cs.GeminiSummaryProvider, "generate", lambda self, prompt: "a generated summary"
+    )
+    register = client.post(
+        "/api/v1/auth/register",
+        json={"email": "aisummary@example.com", "password": "password123"},
+    )
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+
+    response = client.post(
+        f"/api/v1/companies/{seeded_asset.symbol}/ai-summary", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["summary"] == "a generated summary"

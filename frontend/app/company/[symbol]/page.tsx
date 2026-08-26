@@ -9,6 +9,7 @@ import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
 import { ScorePanel } from "@/components/domain/ScorePanel";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
 import { compact, price, tradingDate } from "@/lib/format";
+import { getSignedInUser } from "@/lib/session";
 import {
   ApiError,
   getAiSummary,
@@ -49,7 +50,9 @@ export default async function CompanyPage({
     throw error;
   }
 
-  const [prices, technicals, corporateActions, fundamentals, news, score, aiSummary] =
+  // Generating a summary spends an LLM call, so the backend gates it
+  // behind sign-in; the page itself stays public.
+  const [prices, technicals, corporateActions, fundamentals, news, score, aiSummary, user] =
     await Promise.all([
       getPrices(symbol, range),
       getTechnicals(symbol, range),
@@ -58,6 +61,7 @@ export default async function CompanyPage({
       getNews(symbol),
       getScore(symbol),
       getAiSummary(symbol),
+      getSignedInUser(),
     ]);
 
   const header = company.data;
@@ -150,7 +154,12 @@ export default async function CompanyPage({
 
       <TechnicalPanel snapshot={technicals.data.latest} meta={technicals.meta} />
 
-      <AiSummaryPanel symbol={header.symbol} initial={aiSummary.data} meta={aiSummary.meta} />
+      <AiSummaryPanel
+        symbol={header.symbol}
+        initial={aiSummary.data}
+        meta={aiSummary.meta}
+        canGenerate={user !== null}
+      />
 
       <div className="grid gap-3 xl:grid-cols-[1fr_420px]">
         <FundamentalsPanel

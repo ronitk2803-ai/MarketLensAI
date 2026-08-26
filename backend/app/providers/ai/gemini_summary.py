@@ -6,6 +6,30 @@ Rate-limited, not unlimited: this is only ever called from
 app/services/company_summary.py's click-triggered, cache-aware path, never
 on a schedule or a page load, which is what keeps usage inside the free
 tier regardless of how much traffic the page gets.
+
+--- Diagnosing a dead provider ---
+
+Two failure modes look identical from the app (a 502 after a long wait)
+but have completely different causes. One command separates them:
+
+    KEY=$(grep '^GEMINI_API_KEY=' backend/.env | cut -d= -f2-)
+    curl -s -o /dev/null -w '%{http_code} %{time_total}s\\n' \\
+      "https://generativelanguage.googleapis.com/v1beta/models?key=$KEY"
+    curl -s -o /dev/null -w '%{http_code} %{time_total}s\\n' \\
+      -H 'Content-Type: application/json' \\
+      -d '{"contents":[{"parts":[{"text":"ok"}]}]}' \\
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$KEY"
+
+If the GET returns 200 and the POST hangs or returns an empty-bodied 404,
+the key is valid but **not authorized to generate** — an API-key
+restriction in the Google Cloud console (the response carries
+`vary: Referer`, and a referrer-restricted key behaves exactly this way).
+That is a console fix, not a code fix. Verified live 2026-08-26: the GET
+answered 200 in 0.6s while the POST sent its body in full and received
+zero bytes, from both the host and inside the container, with
+`server: scaffolding on HTTPServer2` proving Google itself was answering.
+If instead the GET fails too, it's the key or the network; if the POST
+404s *with* a JSON body naming the model, the model was retired.
 """
 
 import time
@@ -21,6 +45,20 @@ API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gener
 # an error for what is, from their side, one button click.
 _MAX_ATTEMPTS = 3
 _RETRY_DELAY_SECONDS = 2.0
+
+# Total wall-clock budget across every attempt. The attempt count alone
+# doesn't bound anything: 3 attempts at a flat 30s plus two 2s sleeps is
+# ~94 seconds, and because the endpoint is a sync `def` that is 94 seconds
+# of a threadpool worker held open per click. Retries still exist (a read
+# timeout genuinely deserves a second chance — see the handler below), but
+# they now have to fit inside this budget.
+_TOTAL_DEADLINE_SECONDS = 45.0
+
+# Split rather than one flat value: a connect stall means the host is
+# unreachable and should be given up on quickly, whereas a slow generation
+# is the normal case and needs real room.
+_CONNECT_TIMEOUT = 5.0
+_READ_TIMEOUT = 25.0
 # An alias Google keeps pointed at their current recommended flash model,
 # rather than a pinned version — pinned versions get retired periodically
 # (this is exactly what broke "gemini-2.0-flash" here, verified live
@@ -43,15 +81,35 @@ class GeminiSummaryProvider:
 
     def generate(self, prompt: str) -> str:
         owns_client = self._client is None
-        client = self._client or httpx.Client(timeout=30.0)
+        client = self._client or httpx.Client(
+            timeout=httpx.Timeout(
+                connect=_CONNECT_TIMEOUT, read=_READ_TIMEOUT, write=5.0, pool=5.0
+            )
+        )
+        deadline = time.monotonic() + _TOTAL_DEADLINE_SECONDS
         try:
             last_error: ProviderError | None = None
             for attempt in range(1, _MAX_ATTEMPTS + 1):
+                remaining = deadline - time.monotonic()
+                if attempt > 1 and remaining <= 0:
+                    # Budget spent. Whatever the last failure was is the
+                    # honest thing to report — inventing a "timed out
+                    # overall" message would hide which call actually broke.
+                    break
                 try:
                     response = client.post(
                         API_URL.format(model=self._model),
                         params={"key": self._api_key},
                         json={"contents": [{"parts": [{"text": prompt}]}]},
+                        # Clamped so a final attempt can't run past the
+                        # budget. Only narrows the read leg; connect stays
+                        # short regardless.
+                        timeout=httpx.Timeout(
+                            connect=_CONNECT_TIMEOUT,
+                            read=min(_READ_TIMEOUT, max(remaining, 1.0)),
+                            write=5.0,
+                            pool=5.0,
+                        ),
                     )
                 except httpx.HTTPError as error:
                     # Network-level failure (timeout, connection reset) —
@@ -74,9 +132,23 @@ class GeminiSummaryProvider:
                 if response.status_code == 429:
                     raise ProviderError("gemini_summary", "rate limited", retryable=True)
                 if response.status_code != 200:
+                    body = response.text[:500]
+                    # Google returns a JSON error body for genuine problems
+                    # (bad model, malformed request). A 4xx with an *empty*
+                    # body, on a model that models.list says supports
+                    # generateContent, is the signature of a key that can
+                    # read but not generate — say so rather than reporting a
+                    # bare status nobody can act on. See the module
+                    # docstring for the one-command confirmation.
+                    if not body.strip() and 400 <= response.status_code < 500:
+                        body = (
+                            "empty response body — the API key is likely valid but not "
+                            "authorized to generate (check API-key restrictions in the "
+                            "Google Cloud console); see this module's docstring to confirm"
+                        )
                     last_error = ProviderError(
                         "gemini_summary",
-                        f"generate failed: {response.status_code}: {response.text[:500]}",
+                        f"generate failed: {response.status_code}: {body}",
                         retryable=response.status_code >= 500,
                     )
                     if last_error.retryable and attempt < _MAX_ATTEMPTS:

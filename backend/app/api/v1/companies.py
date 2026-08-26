@@ -9,7 +9,8 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset
+from app.core.security import get_current_user
+from app.db.models import AppUser, Asset
 from app.db.session import get_db
 from app.providers.errors import ProviderError
 from app.services.adjusted_prices import get_adjusted_bars
@@ -241,10 +242,19 @@ def get_ai_summary(symbol: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/companies/{symbol}/ai-summary")
-def create_ai_summary(symbol: str, db: Session = Depends(get_db)) -> dict:
+def create_ai_summary(
+    symbol: str,
+    current_user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
     """User-triggered generation. Cache-aware (app/services/company_summary.py):
     a click when nothing about the company changed since the last click
-    reuses the cached row rather than spending another API call."""
+    reuses the cached row rather than spending another API call.
+
+    Sign-in required — this is the only endpoint in the app that can spend
+    an LLM call, and there is no rate limiter anywhere, so the auth gate is
+    what actually bounds abuse (the same reasoning as POST /screener/run).
+    The GET below stays public: it only ever reads the cache and is free."""
     asset = _get_asset_or_404(db, symbol)
     try:
         row = generate_summary(db, asset)

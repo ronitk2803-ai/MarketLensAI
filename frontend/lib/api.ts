@@ -27,10 +27,27 @@ interface Envelope<T> {
   meta: Meta;
 }
 
+/** Reads the backend's `{"detail": "..."}` error body, which FastAPI
+ * returns for every HTTPException. Shared by both wrappers below: an
+ * enveloped endpoint still errors as bare `{detail}`, so dropping it there
+ * meant a caller could only ever know *that* a request failed, never why.
+ * That is how a permanently misconfigured LLM key read as a transient
+ * "try again in a moment" for days. */
+async function _errorDetail(res: Response): Promise<string | undefined> {
+  return res
+    .json()
+    .then((body: unknown) =>
+      typeof body === "object" && body !== null && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : undefined,
+    )
+    .catch(() => undefined);
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
   const res = await fetch(`${API_BASE_URL}${path}`, init);
   if (!res.ok) {
-    throw new ApiError(`Request to ${path} failed`, res.status);
+    throw new ApiError(`Request to ${path} failed`, res.status, await _errorDetail(res));
   }
   return res.json() as Promise<Envelope<T>>;
 }
@@ -42,15 +59,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<Envelope<T
 async function apiFetchRaw<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, init);
   if (!res.ok) {
-    const detail = await res
-      .json()
-      .then((body: unknown) =>
-        typeof body === "object" && body !== null && "detail" in body
-          ? String((body as { detail: unknown }).detail)
-          : undefined,
-      )
-      .catch(() => undefined);
-    throw new ApiError(`Request to ${path} failed`, res.status, detail);
+    throw new ApiError(`Request to ${path} failed`, res.status, await _errorDetail(res));
   }
   return res.json() as Promise<T>;
 }
@@ -478,9 +487,14 @@ export function getAiSummary(symbol: string) {
 /** The button's action — the only thing that can spend an LLM call, and
  * only when the cached summary is actually out of date (see backend
  * app/services/company_summary.py). */
-export function generateAiSummary(symbol: string) {
+/** Takes an access token because the backend gates this one behind
+ * sign-in — it is the only endpoint that can spend an LLM call, and the
+ * app has no rate limiter. The GET above stays token-free: reading a
+ * cached summary is public and free. */
+export function generateAiSummary(accessToken: string, symbol: string) {
   return apiFetch<AiSummary>(`/companies/${encodeURIComponent(symbol)}/ai-summary`, {
     method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
     cache: "no-store",
   }).then((e) => e.data);
 }
