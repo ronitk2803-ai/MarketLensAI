@@ -1,3 +1,4 @@
+import { Bell } from "lucide-react";
 import Link from "next/link";
 
 import { AccountControl } from "@/components/domain/AccountControl";
@@ -8,6 +9,7 @@ import { getSignedInUser } from "@/lib/session";
 
 export async function AppHeader() {
   const user = await getSignedInUser();
+  const unread = user?.unread_alert_count ?? 0;
 
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur">
@@ -30,6 +32,24 @@ export async function AppHeader() {
         </nav>
 
         <ThemeToggle />
+        {/* Rendered from the session payload already in hand, so the count
+            is correct on first paint rather than popping in after a client
+            fetch. Signed-out visitors have no alerts, so no bell. */}
+        {user && (
+          <Link
+            href="/alerts"
+            aria-label={unread > 0 ? `Alerts (${unread} unread)` : "Alerts"}
+            title={unread > 0 ? `${unread} unread` : "Alerts"}
+            className="relative grid size-8 shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Bell className="size-4" aria-hidden />
+            {unread > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] leading-4 font-medium text-primary-foreground">
+                {unread > 9 ? "9+" : unread}
+              </span>
+            )}
+          </Link>
+        )}
         <AccountControl user={user} />
 
         <div className="order-last w-full sm:order-none sm:ml-auto sm:max-w-md">

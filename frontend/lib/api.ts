@@ -498,6 +498,58 @@ export interface AuthTokens {
 export interface AuthUser {
   id: number;
   email: string;
+  /** Carried on the session payload rather than fetched separately —
+   * AppHeader already awaits this on every page render, so the bell's
+   * count costs no extra round trip. */
+  unread_alert_count: number;
+}
+
+// In-app alerts (Build_plan.md §S step 24) — bare JSON like Thesis and
+// Portfolio: this app telling one user about their own watchlist or
+// thesis, not market data with source/confidence to report.
+
+export type AlertKind =
+  | "thesis_challenged"
+  | "price_drop"
+  | "price_surge"
+  | "unusual_volume"
+  | "week52_high"
+  | "week52_low";
+
+export interface UserAlert {
+  id: number;
+  kind: AlertKind;
+  title: string;
+  body: string | null;
+  symbol: string;
+  exchange: string;
+  /** The bar date the signal was computed from — not when the row was
+   * written. These are end-of-day figures surfaced hours after close. */
+  as_of: string;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface AlertsResponse {
+  alerts: UserAlert[];
+  unread_count: number;
+}
+
+export function getAlerts(accessToken: string, { unread = false, limit = 50 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (unread) params.set("unread", "true");
+  return apiFetchRaw<AlertsResponse>(`/alerts?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}
+
+export function markAlertsRead(accessToken: string) {
+  return apiFetchRaw<{ marked_read: number }>("/alerts/read", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
 }
 
 export function registerUser(email: string, password: string) {
