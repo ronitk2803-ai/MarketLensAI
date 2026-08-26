@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    Alert,
     Asset,
     CorporateAction,
     FinancialMetric,
@@ -48,6 +49,7 @@ def _cleanup_committed_rows(db: Session) -> None:
         db.query(FinancialMetric).filter(FinancialMetric.asset_id.in_(asset_ids)).delete(
             synchronize_session=False
         )
+        db.query(Alert).filter(Alert.asset_id.in_(asset_ids)).delete(synchronize_session=False)
         db.query(Asset).filter(Asset.id.in_(asset_ids)).delete(synchronize_session=False)
         db.commit()
 
@@ -120,7 +122,7 @@ def test_run_daily_ingestion_end_to_end(db: Session) -> None:
     # assert on this asset's own outcome rather than on global counts.
     asset = _make_asset(db)
 
-    result = run_daily_ingestion(db, price_lookback_days=10)
+    result = run_daily_ingestion(db, price_lookback_days=10, with_alerts=False)
 
     assert result.corporate_actions_errors == 0
     assert result.scores_errors == 0
@@ -145,7 +147,7 @@ def test_run_daily_ingestion_skips_non_equity_and_inactive_assets(db: Session) -
     db.add_all([etf, inactive])
     db.flush()
 
-    run_daily_ingestion(db, price_lookback_days=10)
+    run_daily_ingestion(db, price_lookback_days=10, with_alerts=False)
 
     assert db.query(Score).filter_by(asset_id=etf.id).count() == 0
     assert db.query(Score).filter_by(asset_id=inactive.id).count() == 0
@@ -164,7 +166,7 @@ def test_run_daily_ingestion_continues_past_a_single_asset_failure(
 
     monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_ratios", fail)
 
-    result = run_daily_ingestion(db, price_lookback_days=10)
+    result = run_daily_ingestion(db, price_lookback_days=10, with_alerts=False)
 
     # A fundamentals outage propagates as a genuine per-asset scoring failure
     # (not swallowed into a degraded-but-computed score), and the batch still

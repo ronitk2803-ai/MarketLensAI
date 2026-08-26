@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import Asset, Company, ScoreProfile
+from app.services.alerts import AlertGenerationResult, generate_alerts
 from app.services.backfill import BackfillResult, backfill_universe_from_bhavcopy
 from app.services.corporate_actions import get_or_fetch_corporate_actions
 from app.services.scoring import get_or_compute_score
@@ -45,6 +46,8 @@ class DailyIngestionResult:
     scores_errors: int
     thesis_events_created: int
     thesis_eval_errors: int
+    alerts_created: int = 0
+    alerts_pruned: int = 0
 
 
 def _active_equity_universe(db: Session) -> list[Asset]:
@@ -60,7 +63,13 @@ def _active_equity_universe(db: Session) -> list[Asset]:
     )
 
 
-def run_daily_ingestion(db: Session, *, price_lookback_days: int = 10) -> DailyIngestionResult:
+def run_daily_ingestion(
+    db: Session, *, price_lookback_days: int = 10, with_alerts: bool = True
+) -> DailyIngestionResult:
+    """`with_alerts=False` is for tests: this job commits for real, and
+    generating alerts off the synthetic bars the test fixtures stub in
+    would inject fabricated signals into whatever accounts exist on the
+    dev database."""
     end = dt.date.today()
     start = end - dt.timedelta(days=price_lookback_days)
     backfill = backfill_universe_from_bhavcopy(db, start, end)
@@ -103,6 +112,15 @@ def run_daily_ingestion(db: Session, *, price_lookback_days: int = 10) -> DailyI
     db.commit()
     logger.info("daily_ingestion: thesis eval %s", thesis_eval)
 
+    # Last, and after thesis eval commits — it reads the ThesisEvent rows
+    # that step just wrote. Idempotent, so a re-run (weekend, missed-run
+    # catch-up) produces nothing new.
+    alerts = AlertGenerationResult()
+    if with_alerts:
+        alerts = generate_alerts(db)
+        db.commit()
+        logger.info("daily_ingestion: alerts %s", alerts)
+
     result = DailyIngestionResult(
         backfill=backfill,
         corporate_actions_processed=ca_processed,
@@ -111,6 +129,8 @@ def run_daily_ingestion(db: Session, *, price_lookback_days: int = 10) -> DailyI
         scores_errors=scores_errors,
         thesis_events_created=thesis_eval.events_created,
         thesis_eval_errors=thesis_eval.errors,
+        alerts_created=alerts.thesis_alerts + alerts.watchlist_alerts,
+        alerts_pruned=alerts.pruned,
     )
     logger.info("daily_ingestion: done %s", result)
     return result

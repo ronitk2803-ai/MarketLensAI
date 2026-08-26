@@ -21,26 +21,38 @@ from app.services.prices import row_to_bar
 
 
 def load_universe_bars_with_ids(
-    db: Session, lookback_days: int
+    db: Session, lookback_days: int, *, asset_ids: set[int] | None = None
 ) -> tuple[dict[AssetRef, list[Bar]], dict[AssetRef, int]]:
     """Same as _load_universe_bars, but also hands back each AssetRef's
     row id. AssetRef is a provider-agnostic value object with no id on it
     (app/domain/models.py), so a caller that needs to query another table
     keyed by asset_id — the screener's bulk ratio read — has no way to get
-    there from the universe dict alone."""
+    there from the universe dict alone.
+
+    `asset_ids` narrows the load to specific assets (the alert job only
+    cares about watchlisted ones). Callers with a narrow set should still
+    come through here rather than hand-rolling a query: the value isn't
+    the row count, it's that this applies corporate-action adjustment. A
+    loader that skipped it would report a fabricated -50% "price move" on
+    every split day."""
     cutoff = dt.date.today() - dt.timedelta(days=lookback_days)
+    filters = [
+        PriceOHLCV.date >= cutoff,
+        Asset.active.is_(True),
+        # ETFs slipped into the "EQ" universe (verified live — an ETF
+        # unit consolidation showed as a false ~90% crash since our
+        # corporate-actions source doesn't track it as a stock split);
+        # screens are only meaningful for real listed equities.
+        Asset.asset_class == "EQUITY",
+    ]
+    if asset_ids is not None:
+        if not asset_ids:
+            return {}, {}
+        filters.append(Asset.id.in_(asset_ids))
     rows = (
         db.query(PriceOHLCV, Asset)
         .join(Asset, Asset.id == PriceOHLCV.asset_id)
-        .filter(
-            PriceOHLCV.date >= cutoff,
-            Asset.active.is_(True),
-            # ETFs slipped into the "EQ" universe (verified live — an ETF
-            # unit consolidation showed as a false ~90% crash since our
-            # corporate-actions source doesn't track it as a stock split);
-            # screens are only meaningful for real listed equities.
-            Asset.asset_class == "EQUITY",
-        )
+        .filter(*filters)
         .order_by(Asset.id, PriceOHLCV.date)
         .all()
     )

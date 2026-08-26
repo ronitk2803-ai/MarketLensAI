@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.models import AppUser
 from app.db.session import get_db
+from app.services.alerts import unread_count
 from app.services.auth import (
     authenticate_user,
     create_user,
@@ -49,6 +50,13 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: int
     email: str
+    # Carried here rather than on its own endpoint: the frontend's
+    # AppHeader already awaits this payload on every page render, so the
+    # bell's count costs zero extra round trips. A dedicated count
+    # endpoint would double the Next->FastAPI hops per page. /me exists to
+    # answer "what does this session need to render the chrome", and the
+    # bell is chrome.
+    unread_alert_count: int = 0
 
 
 def _min_password_length_check(password: str) -> None:
@@ -98,5 +106,11 @@ def logout(payload: LogoutRequest, db: Session = Depends(get_db)) -> dict[str, s
 
 
 @router.get("/me", response_model=UserResponse)
-def me(current_user: AppUser = Depends(get_current_user)) -> UserResponse:
-    return UserResponse(id=current_user.id, email=current_user.email)
+def me(
+    current_user: AppUser = Depends(get_current_user), db: Session = Depends(get_db)
+) -> UserResponse:
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        unread_alert_count=unread_count(db, current_user.id),
+    )
