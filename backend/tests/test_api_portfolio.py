@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Asset
 from app.db.session import get_db
 from app.main import app
+from tests.helpers import auth_headers
 
 client = TestClient(app)
 
@@ -28,12 +29,6 @@ def _seed_asset(db: Session, symbol: str) -> None:
     db.flush()
 
 
-def _auth_headers(email: str) -> dict[str, str]:
-    response = client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "password123"}
-    )
-    access_token = response.json()["access_token"]
-    return {"Authorization": f"Bearer {access_token}"}
 
 
 def _add_payload(symbol: str) -> dict:
@@ -59,7 +54,7 @@ def test_add_requires_authentication(db: Session) -> None:
 
 def test_add_and_list_round_trip(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF2")
-    headers = _auth_headers("addlist@example.com")
+    headers = auth_headers("addlist")
 
     added = client.post("/api/v1/portfolio", json=_add_payload("ZZAPIPF2"), headers=headers)
     assert added.status_code == 200
@@ -78,7 +73,7 @@ def test_add_and_list_round_trip(db: Session) -> None:
 
 
 def test_add_rejects_unknown_symbol(db: Session) -> None:
-    headers = _auth_headers("unknownsym_pf@example.com")
+    headers = auth_headers("unknownsym_pf")
     response = client.post(
         "/api/v1/portfolio", json=_add_payload("ZZDOESNOTEXIST"), headers=headers
     )
@@ -87,7 +82,7 @@ def test_add_rejects_unknown_symbol(db: Session) -> None:
 
 def test_add_rejects_non_positive_quantity(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF3")
-    headers = _auth_headers("badqty_pf@example.com")
+    headers = auth_headers("badqty_pf")
     payload = _add_payload("ZZAPIPF3")
     payload["quantity"] = 0
     response = client.post("/api/v1/portfolio", json=payload, headers=headers)
@@ -96,8 +91,8 @@ def test_add_rejects_non_positive_quantity(db: Session) -> None:
 
 def test_update_and_delete_are_ownership_scoped(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF4")
-    alice_headers = _auth_headers("alice_pf@example.com")
-    bob_headers = _auth_headers("bob_pf@example.com")
+    alice_headers = auth_headers("alice_pf")
+    bob_headers = auth_headers("bob_pf")
     created = client.post(
         "/api/v1/portfolio", json=_add_payload("ZZAPIPF4"), headers=alice_headers
     ).json()
@@ -114,7 +109,7 @@ def test_update_and_delete_are_ownership_scoped(db: Session) -> None:
 
 def test_delete_removes_the_holding(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF5")
-    headers = _auth_headers("delete_pf@example.com")
+    headers = auth_headers("delete_pf")
     created = client.post(
         "/api/v1/portfolio", json=_add_payload("ZZAPIPF5"), headers=headers
     ).json()
@@ -136,20 +131,20 @@ def test_import_requires_authentication() -> None:
 
 
 def test_import_requires_a_broker_field(db: Session) -> None:
-    headers = _auth_headers("nobroker_pf@example.com")
+    headers = auth_headers("nobroker_pf")
     files = {"file": ("holdings.csv", _STANDARD_HEADER + "\nTCS,1,1\n", "text/csv")}
     response = client.post("/api/v1/portfolio/import", files=files, headers=headers)
     assert response.status_code == 422
 
 
 def test_import_rejects_an_invalid_broker_value(db: Session) -> None:
-    headers = _auth_headers("badbroker_pf@example.com")
+    headers = auth_headers("badbroker_pf")
     response = _import(headers, _STANDARD_HEADER + "\nTCS,1,1\n", "groww")
     assert response.status_code == 422
 
 
 def test_import_rejects_unsupported_file_extension(db: Session) -> None:
-    headers = _auth_headers("badext_pf@example.com")
+    headers = auth_headers("badext_pf")
     files = {"file": ("holdings.txt", _STANDARD_HEADER + "\nTCS,1,1\n", "text/plain")}
     response = client.post(
         "/api/v1/portfolio/import", files=files, data={"broker": "zerodha"}, headers=headers
@@ -158,13 +153,13 @@ def test_import_rejects_unsupported_file_extension(db: Session) -> None:
 
 
 def test_import_rejects_empty_file(db: Session) -> None:
-    headers = _auth_headers("emptyfile_pf@example.com")
+    headers = auth_headers("emptyfile_pf")
     response = _import(headers, "", "zerodha")
     assert response.status_code == 400
 
 
 def test_import_rejects_oversized_file(db: Session) -> None:
-    headers = _auth_headers("oversized_pf@example.com")
+    headers = auth_headers("oversized_pf")
     oversized = _STANDARD_HEADER + "\n" + ("A" * (6 * 1024 * 1024))
     response = _import(headers, oversized, "zerodha")
     assert response.status_code == 400
@@ -172,7 +167,7 @@ def test_import_rejects_oversized_file(db: Session) -> None:
 
 def test_import_returns_mixed_summary(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF6")
-    headers = _auth_headers("mixedimport_pf@example.com")
+    headers = auth_headers("mixedimport_pf")
     csv_text = _STANDARD_HEADER + "\nZZAPIPF6,5,50\nZZDOESNOTEXIST,1,1\n"
 
     response = _import(headers, csv_text, "zerodha")
@@ -192,7 +187,7 @@ def test_import_xlsx_upload(db: Session) -> None:
     import openpyxl
 
     _seed_asset(db, "ZZAPIPF7")
-    headers = _auth_headers("xlsximport_pf@example.com")
+    headers = auth_headers("xlsximport_pf")
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(["Instrument", "Qty.", "Avg. cost"])
@@ -218,7 +213,7 @@ def test_import_xlsx_upload(db: Session) -> None:
 
 def test_two_broker_imports_consolidate_into_one_row(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF8")
-    headers = _auth_headers("twobroker_pf@example.com")
+    headers = auth_headers("twobroker_pf")
 
     _import(headers, _STANDARD_HEADER + "\nZZAPIPF8,10,100\n", "zerodha")
     _import(headers, _STANDARD_HEADER + "\nZZAPIPF8,5,120\n", "upstox")
@@ -233,7 +228,7 @@ def test_two_broker_imports_consolidate_into_one_row(db: Session) -> None:
 
 def test_reimporting_one_broker_does_not_wipe_the_other(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF9")
-    headers = _auth_headers("noreimportwipe_pf@example.com")
+    headers = auth_headers("noreimportwipe_pf")
 
     _import(headers, _STANDARD_HEADER + "\nZZAPIPF9,10,100\n", "zerodha")
     _import(headers, _STANDARD_HEADER + "\nZZAPIPF9,5,120\n", "upstox")
@@ -250,8 +245,8 @@ def test_reimporting_one_broker_does_not_wipe_the_other(db: Session) -> None:
 
 def test_import_only_touches_the_caller_s_own_holdings(db: Session) -> None:
     _seed_asset(db, "ZZAPIPF11")
-    alice_headers = _auth_headers("alice_import_pf@example.com")
-    bob_headers = _auth_headers("bob_import_pf@example.com")
+    alice_headers = auth_headers("alice_import_pf")
+    bob_headers = auth_headers("bob_import_pf")
     client.post("/api/v1/portfolio", json=_add_payload("ZZAPIPF11"), headers=bob_headers)
 
     _import(alice_headers, _STANDARD_HEADER + "\nZZAPIPF11,9,99\n", "zerodha")

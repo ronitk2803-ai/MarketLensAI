@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Asset
 from app.db.session import get_db
 from app.main import app
+from tests.helpers import auth_headers
 
 client = TestClient(app)
 
@@ -26,12 +27,6 @@ def _seed_asset(db: Session, symbol: str) -> None:
     db.flush()
 
 
-def _auth_headers(email: str) -> dict[str, str]:
-    response = client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "password123"}
-    )
-    access_token = response.json()["access_token"]
-    return {"Authorization": f"Bearer {access_token}"}
 
 
 def _create_payload(symbol: str) -> dict:
@@ -59,7 +54,7 @@ def test_list_requires_authentication() -> None:
 
 def test_create_and_get_round_trip(db: Session) -> None:
     _seed_asset(db, "ZZAPITH2")
-    headers = _auth_headers("create@example.com")
+    headers = auth_headers("create")
 
     created = client.post(
         "/api/v1/theses", json=_create_payload("ZZAPITH2"), headers=headers
@@ -78,7 +73,7 @@ def test_create_and_get_round_trip(db: Session) -> None:
 
 
 def test_create_rejects_unknown_symbol(db: Session) -> None:
-    headers = _auth_headers("unknownsym@example.com")
+    headers = auth_headers("unknownsym")
 
     response = client.post(
         "/api/v1/theses", json=_create_payload("ZZDOESNOTEXIST"), headers=headers
@@ -89,7 +84,7 @@ def test_create_rejects_unknown_symbol(db: Session) -> None:
 
 def test_create_rejects_unknown_metric(db: Session) -> None:
     _seed_asset(db, "ZZAPITH3")
-    headers = _auth_headers("unknownmetric@example.com")
+    headers = auth_headers("unknownmetric")
     payload = _create_payload("ZZAPITH3")
     payload["triggers"] = [{"metric": "not_a_real_metric", "operator": "gt", "threshold": 1.0}]
 
@@ -100,7 +95,7 @@ def test_create_rejects_unknown_metric(db: Session) -> None:
 
 def test_create_rejects_conviction_out_of_range(db: Session) -> None:
     _seed_asset(db, "ZZAPITH4")
-    headers = _auth_headers("badconviction@example.com")
+    headers = auth_headers("badconviction")
     payload = _create_payload("ZZAPITH4")
     payload["conviction"] = 6
 
@@ -111,7 +106,7 @@ def test_create_rejects_conviction_out_of_range(db: Session) -> None:
 
 def test_create_requires_at_least_one_trigger(db: Session) -> None:
     _seed_asset(db, "ZZAPITH5")
-    headers = _auth_headers("notriggers@example.com")
+    headers = auth_headers("notriggers")
     payload = _create_payload("ZZAPITH5")
     payload["triggers"] = []
 
@@ -122,8 +117,8 @@ def test_create_requires_at_least_one_trigger(db: Session) -> None:
 
 def test_list_returns_only_the_caller_s_theses(db: Session) -> None:
     _seed_asset(db, "ZZAPITH6")
-    alice_headers = _auth_headers("alice@example.com")
-    bob_headers = _auth_headers("bob@example.com")
+    alice_headers = auth_headers("alice")
+    bob_headers = auth_headers("bob")
     client.post("/api/v1/theses", json=_create_payload("ZZAPITH6"), headers=alice_headers)
 
     alice_list = client.get("/api/v1/theses", headers=alice_headers).json()
@@ -135,8 +130,8 @@ def test_list_returns_only_the_caller_s_theses(db: Session) -> None:
 
 def test_get_another_user_s_thesis_404s_not_leaks(db: Session) -> None:
     _seed_asset(db, "ZZAPITH7")
-    alice_headers = _auth_headers("alice2@example.com")
-    bob_headers = _auth_headers("bob2@example.com")
+    alice_headers = auth_headers("alice2")
+    bob_headers = auth_headers("bob2")
     created = client.post(
         "/api/v1/theses", json=_create_payload("ZZAPITH7"), headers=alice_headers
     ).json()
@@ -148,7 +143,7 @@ def test_get_another_user_s_thesis_404s_not_leaks(db: Session) -> None:
 
 def test_update_changes_status(db: Session) -> None:
     _seed_asset(db, "ZZAPITH8")
-    headers = _auth_headers("update@example.com")
+    headers = auth_headers("update")
     created = client.post(
         "/api/v1/theses", json=_create_payload("ZZAPITH8"), headers=headers
     ).json()
@@ -163,8 +158,8 @@ def test_update_changes_status(db: Session) -> None:
 
 def test_update_another_user_s_thesis_404s(db: Session) -> None:
     _seed_asset(db, "ZZAPITH9")
-    alice_headers = _auth_headers("alice3@example.com")
-    bob_headers = _auth_headers("bob3@example.com")
+    alice_headers = auth_headers("alice3")
+    bob_headers = auth_headers("bob3")
     created = client.post(
         "/api/v1/theses", json=_create_payload("ZZAPITH9"), headers=alice_headers
     ).json()
@@ -178,7 +173,7 @@ def test_update_another_user_s_thesis_404s(db: Session) -> None:
 
 def test_delete_removes_the_thesis(db: Session) -> None:
     _seed_asset(db, "ZZAPITH10")
-    headers = _auth_headers("delete@example.com")
+    headers = auth_headers("delete")
     created = client.post(
         "/api/v1/theses", json=_create_payload("ZZAPITH10"), headers=headers
     ).json()
@@ -191,8 +186,8 @@ def test_delete_removes_the_thesis(db: Session) -> None:
 
 def test_delete_another_user_s_thesis_404s(db: Session) -> None:
     _seed_asset(db, "ZZAPITH11")
-    alice_headers = _auth_headers("alice4@example.com")
-    bob_headers = _auth_headers("bob4@example.com")
+    alice_headers = auth_headers("alice4")
+    bob_headers = auth_headers("bob4")
     created = client.post(
         "/api/v1/theses", json=_create_payload("ZZAPITH11"), headers=alice_headers
     ).json()

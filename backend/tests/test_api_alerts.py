@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Alert, AppUser, Asset
 from app.db.session import get_db
 from app.main import app
+from tests.helpers import auth_headers, register_user
 
 client = TestClient(app)
 
@@ -20,13 +21,6 @@ def _use_test_session(db: Session) -> Iterator[None]:
     app.dependency_overrides[get_db] = override_get_db
     yield
     app.dependency_overrides.pop(get_db, None)
-
-
-def _auth_headers(email: str) -> dict[str, str]:
-    response = client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "password123"}
-    )
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 def _seed_alert(db: Session, email: str, symbol: str, *, dedup: str, read: bool = False) -> None:
@@ -60,8 +54,8 @@ def test_mark_read_requires_authentication() -> None:
 
 
 def test_list_returns_the_caller_s_alerts_with_an_unread_count(db: Session) -> None:
-    headers = _auth_headers("alertapi1@example.com")
-    _seed_alert(db, "alertapi1@example.com", "ZZAPIAL1", dedup="a1")
+    email, headers = register_user("alertapi1")
+    _seed_alert(db, email, "ZZAPIAL1", dedup="a1")
 
     body = client.get("/api/v1/alerts", headers=headers).json()
 
@@ -76,9 +70,9 @@ def test_list_returns_the_caller_s_alerts_with_an_unread_count(db: Session) -> N
 
 
 def test_list_never_shows_another_user_s_alerts(db: Session) -> None:
-    alice_headers = _auth_headers("alertalice@example.com")
-    _auth_headers("alertbob@example.com")
-    _seed_alert(db, "alertbob@example.com", "ZZAPIAL2", dedup="a2")
+    alice_headers = auth_headers("alertalice")
+    bob_email, _bob_headers = register_user("alertbob")
+    _seed_alert(db, bob_email, "ZZAPIAL2", dedup="a2")
 
     body = client.get("/api/v1/alerts", headers=alice_headers).json()
 
@@ -87,9 +81,9 @@ def test_list_never_shows_another_user_s_alerts(db: Session) -> None:
 
 
 def test_unread_filter(db: Session) -> None:
-    headers = _auth_headers("alertfilter@example.com")
-    _seed_alert(db, "alertfilter@example.com", "ZZAPIAL3", dedup="a3-read", read=True)
-    _seed_alert(db, "alertfilter@example.com", "ZZAPIAL4", dedup="a4-unread")
+    email, headers = register_user("alertfilter")
+    _seed_alert(db, email, "ZZAPIAL3", dedup="a3-read", read=True)
+    _seed_alert(db, email, "ZZAPIAL4", dedup="a4-unread")
 
     all_body = client.get("/api/v1/alerts", headers=headers).json()
     unread_body = client.get("/api/v1/alerts?unread=true", headers=headers).json()
@@ -100,7 +94,7 @@ def test_unread_filter(db: Session) -> None:
 
 
 def test_limit_is_bounded(db: Session) -> None:
-    headers = _auth_headers("alertlimit@example.com")
+    headers = auth_headers("alertlimit")
 
     assert client.get("/api/v1/alerts?limit=201", headers=headers).status_code == 422
     assert client.get("/api/v1/alerts?limit=0", headers=headers).status_code == 422
@@ -108,8 +102,8 @@ def test_limit_is_bounded(db: Session) -> None:
 
 
 def test_mark_read_zeroes_the_count_without_deleting(db: Session) -> None:
-    headers = _auth_headers("alertread@example.com")
-    _seed_alert(db, "alertread@example.com", "ZZAPIAL5", dedup="a5")
+    email, headers = register_user("alertread")
+    _seed_alert(db, email, "ZZAPIAL5", dedup="a5")
 
     marked = client.post("/api/v1/alerts/read", headers=headers).json()
     body = client.get("/api/v1/alerts", headers=headers).json()
@@ -124,10 +118,10 @@ def test_mark_read_zeroes_the_count_without_deleting(db: Session) -> None:
 def test_auth_me_carries_the_unread_count(db: Session) -> None:
     """The header bell reads this rather than a second endpoint, so it
     costs no extra round trip per page render."""
-    headers = _auth_headers("alertme@example.com")
+    email, headers = register_user("alertme")
 
     before = client.get("/api/v1/auth/me", headers=headers).json()
-    _seed_alert(db, "alertme@example.com", "ZZAPIAL6", dedup="a6")
+    _seed_alert(db, email, "ZZAPIAL6", dedup="a6")
     after = client.get("/api/v1/auth/me", headers=headers).json()
 
     assert before["unread_alert_count"] == 0

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Asset, PriceOHLCV
 from app.db.session import get_db
 from app.main import app
+from tests.helpers import auth_headers
 
 client = TestClient(app)
 
@@ -45,15 +46,6 @@ def _seed(db: Session, symbol: str, closes: list[float]) -> None:
     db.flush()
 
 
-def _auth_headers(email: str) -> dict[str, str]:
-    """Registers a fresh account through the real endpoint (not a shortcut
-    through the service layer) so these tests exercise the actual token a
-    browser would present, then returns the header to send it with."""
-    response = client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "password123"}
-    )
-    access_token = response.json()["access_token"]
-    return {"Authorization": f"Bearer {access_token}"}
 
 
 def test_watchlist_requires_authentication() -> None:
@@ -72,7 +64,7 @@ def test_remove_requires_authentication() -> None:
 
 
 def test_watchlist_is_empty_for_a_new_account() -> None:
-    headers = _auth_headers("newacct@example.com")
+    headers = auth_headers("newacct")
 
     response = client.get("/api/v1/watchlist", headers=headers)
 
@@ -82,7 +74,7 @@ def test_watchlist_is_empty_for_a_new_account() -> None:
 
 def test_add_then_list_returns_the_quote(db: Session) -> None:
     _seed(db, "ZZAPIWL1", [100.0, 105.0, 110.0])
-    headers = _auth_headers("addlist@example.com")
+    headers = auth_headers("addlist")
 
     add = client.post("/api/v1/watchlist/ZZAPIWL1", headers=headers)
     assert add.status_code == 200
@@ -96,7 +88,7 @@ def test_add_then_list_returns_the_quote(db: Session) -> None:
 
 
 def test_add_unknown_symbol_404s(db: Session) -> None:
-    headers = _auth_headers("addunknown@example.com")
+    headers = auth_headers("addunknown")
 
     response = client.post("/api/v1/watchlist/ZZDOESNOTEXIST", headers=headers)
 
@@ -105,7 +97,7 @@ def test_add_unknown_symbol_404s(db: Session) -> None:
 
 def test_remove_takes_it_off_the_list(db: Session) -> None:
     _seed(db, "ZZAPIWL2", [100.0])
-    headers = _auth_headers("remove@example.com")
+    headers = auth_headers("remove")
     client.post("/api/v1/watchlist/ZZAPIWL2", headers=headers)
 
     remove = client.delete("/api/v1/watchlist/ZZAPIWL2", headers=headers)
@@ -117,7 +109,7 @@ def test_remove_takes_it_off_the_list(db: Session) -> None:
 
 def test_remove_never_added_symbol_is_not_an_error(db: Session) -> None:
     _seed(db, "ZZAPIWL3", [100.0])
-    headers = _auth_headers("removenoop@example.com")
+    headers = auth_headers("removenoop")
 
     response = client.delete("/api/v1/watchlist/ZZAPIWL3", headers=headers)
 
@@ -126,7 +118,7 @@ def test_remove_never_added_symbol_is_not_an_error(db: Session) -> None:
 
 def test_rejects_non_integer_deltas(db: Session) -> None:
     _seed(db, "ZZAPIWL4", [100.0])
-    headers = _auth_headers("deltas1@example.com")
+    headers = auth_headers("deltas1")
     client.post("/api/v1/watchlist/ZZAPIWL4", headers=headers)
 
     response = client.get(
@@ -137,7 +129,7 @@ def test_rejects_non_integer_deltas(db: Session) -> None:
 
 def test_rejects_zero_or_negative_delta_windows(db: Session) -> None:
     _seed(db, "ZZAPIWL5", [100.0])
-    headers = _auth_headers("deltas2@example.com")
+    headers = auth_headers("deltas2")
     client.post("/api/v1/watchlist/ZZAPIWL5", headers=headers)
 
     response = client.get("/api/v1/watchlist", params={"deltas": "0"}, headers=headers)
@@ -146,7 +138,7 @@ def test_rejects_zero_or_negative_delta_windows(db: Session) -> None:
 
 def test_deltas_default_to_7_14_30_when_omitted(db: Session) -> None:
     _seed(db, "ZZAPIWL6", [100.0] * 40)
-    headers = _auth_headers("deltas3@example.com")
+    headers = auth_headers("deltas3")
     client.post("/api/v1/watchlist/ZZAPIWL6", headers=headers)
 
     response = client.get("/api/v1/watchlist", headers=headers)
@@ -158,7 +150,7 @@ def test_deltas_default_to_7_14_30_when_omitted(db: Session) -> None:
 
 def test_response_includes_range_stats_and_spark(db: Session) -> None:
     _seed(db, "ZZAPIWL7", [50.0, 200.0, 30.0, 100.0])
-    headers = _auth_headers("rangestats@example.com")
+    headers = auth_headers("rangestats")
     client.post("/api/v1/watchlist/ZZAPIWL7", headers=headers)
 
     response = client.get("/api/v1/watchlist", headers=headers)
@@ -173,8 +165,8 @@ def test_response_includes_range_stats_and_spark(db: Session) -> None:
 def test_watchlists_are_isolated_per_account(db: Session) -> None:
     _seed(db, "ZZAPIWLALICE", [100.0])
     _seed(db, "ZZAPIWLBOB", [100.0])
-    alice_headers = _auth_headers("alice@example.com")
-    bob_headers = _auth_headers("bob@example.com")
+    alice_headers = auth_headers("alice")
+    bob_headers = auth_headers("bob")
 
     client.post("/api/v1/watchlist/ZZAPIWLALICE", headers=alice_headers)
     client.post("/api/v1/watchlist/ZZAPIWLBOB", headers=bob_headers)

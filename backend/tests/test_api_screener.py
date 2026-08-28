@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Asset, PriceOHLCV
 from app.db.session import get_db
 from app.main import app
+from tests.helpers import auth_headers
 
 client = TestClient(app)
 
@@ -21,13 +22,6 @@ def _use_test_session(db: Session) -> Iterator[None]:
     app.dependency_overrides[get_db] = override_get_db
     yield
     app.dependency_overrides.pop(get_db, None)
-
-
-def _auth_headers(email: str) -> dict[str, str]:
-    response = client.post(
-        "/api/v1/auth/register", json={"email": email, "password": "password123"}
-    )
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 def _seed_falling_asset(db: Session, symbol: str) -> None:
@@ -76,7 +70,7 @@ def test_run_requires_authentication() -> None:
 
 def test_run_returns_matching_hits(db: Session) -> None:
     _seed_falling_asset(db, "ZZAPISC1")
-    headers = _auth_headers("screener1@example.com")
+    headers = auth_headers("screener1")
 
     response = client.post(
         "/api/v1/screener/run", json={"tree": _simple_tree()}, headers=headers
@@ -91,7 +85,7 @@ def test_run_returns_matching_hits(db: Session) -> None:
 
 
 def test_run_rejects_an_unknown_metric(db: Session) -> None:
-    headers = _auth_headers("screener2@example.com")
+    headers = auth_headers("screener2")
     tree = {"op": "and", "children": [{"metric": "not_a_metric", "operator": "lt",
                                        "threshold": 1}]}
 
@@ -102,7 +96,7 @@ def test_run_rejects_an_unknown_metric(db: Session) -> None:
 
 
 def test_run_rejects_an_unknown_industry(db: Session) -> None:
-    headers = _auth_headers("screener3@example.com")
+    headers = auth_headers("screener3")
 
     response = client.post(
         "/api/v1/screener/run",
@@ -115,7 +109,7 @@ def test_run_rejects_an_unknown_industry(db: Session) -> None:
 
 def test_run_rejects_an_empty_group(db: Session) -> None:
     """An empty AND is vacuously true and would return the whole universe."""
-    headers = _auth_headers("screener4@example.com")
+    headers = auth_headers("screener4")
 
     response = client.post(
         "/api/v1/screener/run", json={"tree": {"op": "and", "children": []}}, headers=headers
@@ -125,7 +119,7 @@ def test_run_rejects_an_empty_group(db: Session) -> None:
 
 
 def test_run_rejects_an_over_nested_tree(db: Session) -> None:
-    headers = _auth_headers("screener5@example.com")
+    headers = auth_headers("screener5")
     tree: dict = {"metric": "close", "operator": "lt", "threshold": 1}
     for _ in range(6):
         tree = {"op": "and", "children": [tree]}
@@ -136,7 +130,7 @@ def test_run_rejects_an_over_nested_tree(db: Session) -> None:
 
 
 def test_run_rejects_too_many_conditions(db: Session) -> None:
-    headers = _auth_headers("screener6@example.com")
+    headers = auth_headers("screener6")
     tree = {
         "op": "and",
         "children": [
@@ -159,7 +153,7 @@ def test_run_rejects_too_many_conditions(db: Session) -> None:
 def test_run_rejects_the_eq_operator(db: Session) -> None:
     """Exact float equality against a computed indicator can never match,
     so offering it would only produce unexplainable empty results."""
-    headers = _auth_headers("screener7@example.com")
+    headers = auth_headers("screener7")
     tree = {"op": "and", "children": [{"metric": "rsi14", "operator": "eq", "threshold": 30}]}
 
     response = client.post("/api/v1/screener/run", json={"tree": tree}, headers=headers)

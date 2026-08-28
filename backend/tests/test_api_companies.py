@@ -15,6 +15,7 @@ from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.nse_sector_pe import IndexPeRow
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
+from tests.helpers import auth_headers
 
 client = TestClient(app)
 
@@ -452,11 +453,7 @@ def test_post_ai_summary_reaches_the_service_when_authenticated(
     monkeypatch.setattr(
         cs.GeminiSummaryProvider, "generate", lambda self, prompt: "a generated summary"
     )
-    register = client.post(
-        "/api/v1/auth/register",
-        json={"email": "aisummary@example.com", "password": "password123"},
-    )
-    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+    headers = auth_headers("aisummary")
 
     response = client.post(
         f"/api/v1/companies/{seeded_asset.symbol}/ai-summary", headers=headers
