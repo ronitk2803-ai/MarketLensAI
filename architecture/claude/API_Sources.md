@@ -112,6 +112,52 @@ No source offers **correct + free + complete** Indian fundamentals. Strategy = l
 
 **Redundancy chain:** `curated seed (MVP) → yfinance → AlphaVantage/FMP cross-check → XBRL (P2 authoritative)`.
 Every fundamental carries `source + as_of + confidence`; missing = shown as **"data unavailable,"** never guessed.
+
+### 7.1 XBRL feasibility — verified reachable 2026-08-29, not yet built
+
+Re-verified live, the same way §6's corporate-actions endpoint was: reachable
+with a plain `httpx.Client`, no auth, no cookie priming.
+
+- **Filing index** (per symbol, no bulk endpoint):
+  `GET www.nseindia.com/api/corporates-financial-results?index=equities&symbol=RELIANCE&period=Quarterly`
+  → one JSON row per filed period, each carrying an `xbrl` field with a
+  direct link into `nsearchives.nseindia.com/corporate/xbrl/...xml` (same
+  auth-free archives subdomain §3/§6 already rely on).
+- **The XML itself parses cleanly** — a real RELIANCE Q3 FY25 filing, fetched
+  live, is a standard `in-bse-fin` (Ind-AS) taxonomy instance: 84 distinct,
+  self-describing fact tags in the quarterly-results filing alone
+  (`RevenueFromOperations`, `ProfitLossForPeriod`, `CostOfMaterialsConsumed`,
+  `EmployeeBenefitExpense`, `DebtEquityRatio`, `BasicEarningsLossPerShare...`,
+  etc.), each tied to a `contextRef` (period) and `unitRef` (currency/scale).
+- **What actually makes this P2, not a quick add:**
+  1. **No bulk discovery.** Unlike Bhavcopy/corporate-actions (one request =
+     the whole market), the filing index is one request *per symbol* — a
+     full-universe pass is ~500 requests just to find out which XBRL URLs
+     exist, before any parsing starts.
+  2. **Not every filing has one.** Older filings (`"format": "Old"`, seen as
+     far back as the sample checked) carry `"xbrl": ".../-"` — no XML at
+     all, only an HTML `resultDetailedDataLink`. Full historical depth needs
+     an HTML fallback path too, roughly doubling the parsing surface.
+  3. **Taxonomy variants.** "Ind-AS New" vs "Non-Ind-AS" filings use
+     different tag sets; consolidated vs standalone and quarterly vs annual
+     each need their own tag-to-metric mapping, not one universal table.
+  4. **Correctness risk is asymmetric here.** This app's one unbreakable
+     rule is "never fabricate" — but XBRL is meant to be the **authoritative,
+     high-confidence** source (§ redundancy chain above), so a wrong tag
+     mapping wouldn't show up as an honest gap, it would show up as a
+     *confidently wrong* number carrying `confidence="high"`. That's a worse
+     failure mode than today's "low confidence, single uncross-checked
+     source," and the only real way to catch a wrong mapping is manual
+     cross-checking against a company's actual published results —
+     something that needs doing carefully, not inside one unsupervised pass.
+
+**Recommendation:** the reachability/format risk that made this feel
+speculative is resolved — it's buildable. The remaining work is real
+(discovery loop, a maintained tag-mapping table per taxonomy variant, an
+HTML-fallback parser for pre-XBRL filings, and — non-negotiably — manual
+verification of the mapping against real published results before trusting
+it at `confidence="high"`) and belongs in its own dedicated pass with that
+verification step built in, not appended to an unrelated session.
 💵 **Want better fundamentals for money? See §12 — realistic verdict: ₹500/mo won't fix this; the real fix is ~₹1,700–5,000/mo (EODHD).**
 
 ---

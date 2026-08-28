@@ -457,6 +457,18 @@ One provider (yfinance), always rendered at low confidence, fields omitted
 rather than estimated. This was flagged as the project's #1 risk from day one
 and remains true. An XBRL parser is the real fix.
 
+**Feasibility checked live 2026-08-29** (`API_Sources.md` §7.1): NSE's XBRL
+filing endpoint is reachable and a real filing parses cleanly — the
+believed-hard part isn't actually the blocker. What makes it real P2 work
+rather than a quick add: no bulk discovery (one request per symbol), older
+filings have no XBRL at all (HTML-only fallback needed), multiple taxonomy
+variants (Ind-AS/non-Ind-AS, standalone/consolidated), and — the reason this
+wasn't attempted in the same pass as the other fixes this session —
+mismapping a tag would silently produce a *confidently wrong*
+`confidence="high"` number, worse than today's honest low-confidence gap.
+Needs its own pass with manual cross-checking against real published
+results built into the process, not a rushed unsupervised build.
+
 ### 9.3 News is one month deep and unclassified
 
 ~1 month of history and **every `event_type` is NULL**. Coverage was 24 of
