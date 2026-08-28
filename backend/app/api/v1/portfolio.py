@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_verified_user
 from app.db.models import AppUser
 from app.db.session import get_db
 from app.services.portfolio import (
@@ -104,7 +104,7 @@ def get_portfolio(
 @router.post("")
 def add_holding(
     payload: AddHoldingRequest,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict:
     holding = add_or_update_holding(
@@ -123,7 +123,7 @@ def add_holding(
 def edit_holding(
     holding_id: int,
     payload: UpdateHoldingRequest,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict:
     holding = update_holding(
@@ -141,7 +141,7 @@ def edit_holding(
 @router.delete("/{holding_id}")
 def remove_holding(
     holding_id: int,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     deleted = delete_holding(db, current_user.id, holding_id)
@@ -154,7 +154,7 @@ def remove_holding(
 def import_file(
     file: UploadFile = File(...),
     broker: Literal["zerodha", "upstox"] = Form(...),
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict:
     filename = file.filename or ""

@@ -9,7 +9,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_verified_user
 from app.db.models import AppUser, Asset
 from app.db.session import get_db
 from app.engines.historical import DIMENSIONS_COMPARED, DIMENSIONS_UNAVAILABLE, Episode
@@ -246,16 +246,23 @@ def get_ai_summary(symbol: str, db: Session = Depends(get_db)) -> dict:
 @router.post("/companies/{symbol}/ai-summary")
 def create_ai_summary(
     symbol: str,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict:
     """User-triggered generation. Cache-aware (app/services/company_summary.py):
     a click when nothing about the company changed since the last click
     reuses the cached row rather than spending another API call.
 
-    Sign-in required — this is the only endpoint in the app that can spend
-    an LLM call, and there is no rate limiter anywhere, so the auth gate is
-    what actually bounds abuse (the same reasoning as POST /screener/run).
+    Requires a VERIFIED account, which is a stricter bar than the rest of
+    the app and than POST /screener/run, whose gate this used to share.
+    The difference: a screener run is CPU we already own, while this is the
+    only endpoint that can spend an LLM call against a rate-limited free
+    tier. With no rate limiter anywhere, "you must own a real inbox" is the
+    cheapest meaningful bound on someone burning that quota with throwaway
+    signups. Note this is not the "can't save anything" rule the other
+    gated endpoints implement — nothing is saved on the user's behalf here;
+    it is a cost control that happens to use the same dependency.
+
     The GET below stays public: it only ever reads the cache and is free."""
     asset = _get_asset_or_404(db, symbol)
     try:

@@ -32,6 +32,7 @@ export function PortfolioTable({ holdings }: { holdings: PortfolioHolding[] }) {
   const [draftQuantity, setDraftQuantity] = useState("");
   const [draftAvgCost, setDraftAvgCost] = useState("");
   const [busyLotId, setBusyLotId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   if (holdings.length === 0) {
     return (
@@ -47,18 +48,33 @@ export function PortfolioTable({ holdings }: { holdings: PortfolioHolding[] }) {
     setDraftAvgCost(String(lot.avg_cost));
   }
 
+  /** Both mutations previously ignored the response, which was safe only
+   *  while they could not fail. The verified-email gate can now refuse them
+   *  with a 403, and an edit that silently reverts is worse than an error. */
+  async function failureMessage(res: Response): Promise<string | null> {
+    if (res.ok) return null;
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    return body.error ?? "That didn't save. Try again.";
+  }
+
   async function saveEdit(holdingId: number) {
     const quantity = Number.parseFloat(draftQuantity);
     const avgCost = Number.parseFloat(draftAvgCost);
     if (!(quantity > 0) || !(avgCost > 0)) return;
 
     setBusyLotId(holdingId);
+    setError(null);
     try {
-      await fetch(`/api/portfolio/${holdingId}`, {
+      const res = await fetch(`/api/portfolio/${holdingId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ quantity, avg_cost: avgCost }),
       });
+      const message = await failureMessage(res);
+      if (message) {
+        setError(message);
+        return;
+      }
       setEditingLotId(null);
       router.refresh();
     } finally {
@@ -69,8 +85,14 @@ export function PortfolioTable({ holdings }: { holdings: PortfolioHolding[] }) {
   async function handleDelete(holdingId: number) {
     if (!confirm("Remove this holding?")) return;
     setBusyLotId(holdingId);
+    setError(null);
     try {
-      await fetch(`/api/portfolio/${holdingId}`, { method: "DELETE" });
+      const res = await fetch(`/api/portfolio/${holdingId}`, { method: "DELETE" });
+      const message = await failureMessage(res);
+      if (message) {
+        setError(message);
+        return;
+      }
       router.refresh();
     } finally {
       setBusyLotId(null);
@@ -266,6 +288,7 @@ export function PortfolioTable({ holdings }: { holdings: PortfolioHolding[] }) {
           })}
         </tbody>
       </table>
+      {error && <p className="px-3 py-1.5 text-[11px] text-down">{error}</p>}
     </div>
   );
 }

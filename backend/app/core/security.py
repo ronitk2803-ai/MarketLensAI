@@ -37,3 +37,32 @@ def get_current_user(
     if user is None:
         raise HTTPException(status_code=401, detail="not authenticated")
     return user
+
+
+# The message endpoints return when the account is real but the address
+# hasn't been confirmed. Kept as a constant because the frontend surfaces
+# `detail` verbatim in several forms, so this string is UI copy.
+UNVERIFIED_DETAIL = "verify your email address to save changes"
+
+
+def get_current_verified_user(
+    current_user: AppUser = Depends(get_current_user),
+) -> AppUser:
+    """`get_current_user` plus a confirmed email address.
+
+    403 rather than 401: the session is perfectly valid, the account just
+    isn't allowed to do this yet. A 401 would tell the frontend to send the
+    user back to a login screen they are already past.
+
+    Depends on the other dependency rather than re-reading the token, so
+    FastAPI's per-request caching means this costs no extra query.
+
+    Worth noting why an old token can't slip past: access tokens carry only
+    `sub` and `exp`, so verification status is never in the token and is
+    read from the row on every request. Verifying takes effect on the next
+    request with the same token, and a token minted before this gate existed
+    is evaluated against current state like any other.
+    """
+    if current_user.email_verified_at is None:
+        raise HTTPException(status_code=403, detail=UNVERIFIED_DETAIL)
+    return current_user

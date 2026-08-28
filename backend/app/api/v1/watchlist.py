@@ -7,7 +7,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_verified_user
 from app.db.models import AppUser
 from app.db.session import get_db
 from app.services.watchlist import (
@@ -86,7 +86,7 @@ def watchlist(
 @router.post("/watchlist/{symbol}")
 def add_watchlist_item(
     symbol: str,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     added = add_to_watchlist(db, current_user.id, symbol)
@@ -98,7 +98,7 @@ def add_watchlist_item(
 @router.delete("/watchlist/{symbol}")
 def remove_watchlist_item(
     symbol: str,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     remove_from_watchlist(db, current_user.id, symbol)

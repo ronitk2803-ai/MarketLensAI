@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_verified_user
 from app.db.models import AppUser, Thesis, ThesisEvent, ThesisTrigger
 from app.db.session import get_db
 from app.services.metric_registry import METRIC_KEYS
@@ -109,7 +109,7 @@ def _event_to_dict(e: ThesisEvent) -> dict:
 @router.post("")
 def create(
     payload: CreateThesisRequest,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict:
     _validate_metrics(payload.triggers)
@@ -172,7 +172,7 @@ def get_one(
 def update(
     thesis_id: int,
     payload: UpdateThesisRequest,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict:
     thesis = update_thesis(
@@ -193,7 +193,7 @@ def update(
 @router.delete("/{thesis_id}")
 def delete(
     thesis_id: int,
-    current_user: AppUser = Depends(get_current_user),
+    current_user: AppUser = Depends(get_current_verified_user),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     deleted = delete_thesis(db, current_user.id, thesis_id)

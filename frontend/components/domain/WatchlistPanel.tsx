@@ -45,6 +45,7 @@ export function WatchlistPanel({ user }: { user: AuthUser | null }) {
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const importAttempted = useRef(false);
 
   const symbols = quotes.map((q) => q.symbol);
@@ -110,26 +111,51 @@ export function WatchlistPanel({ user }: { user: AuthUser | null }) {
     setImporting(true);
     Promise.all(
       localSymbols.map((symbol) =>
-        fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "POST" }).catch(() => {}),
+        fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "POST" })
+          .then((res) => res.ok)
+          .catch(() => false),
       ),
     )
-      .then(() => {
-        clearLocalWatchlistSymbols();
+      .then((results) => {
+        // Only clear local state once every symbol actually landed on the
+        // server. This used to clear unconditionally behind a
+        // `.catch(() => {})`, which was harmless while the POST always
+        // succeeded — but an unverified account now gets a 403 on every
+        // one, and the old code would have deleted the whole local
+        // watchlist in exchange for nothing.
+        if (results.every(Boolean)) {
+          clearLocalWatchlistSymbols();
+        } else {
+          setError("Verify your email to save this watchlist to your account.");
+        }
         return refresh();
       })
       .finally(() => setImporting(false));
   }, [user, loadedOnce, quotes.length, refresh]);
 
-  async function addSymbol(symbol: string) {
-    const upper = symbol.trim().toUpperCase();
-    if (!upper || symbols.includes(upper)) return;
-    await fetch(`/api/watchlist/${encodeURIComponent(upper)}`, { method: "POST" });
+  /** Surfaces why a write was refused instead of silently doing nothing.
+   *  The refusal that matters is the verified-email gate: without this the
+   *  row simply fails to appear and the app looks broken rather than
+   *  gated. */
+  async function mutate(symbol: string, method: "POST" | "DELETE") {
+    setError(null);
+    const res = await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(body.error ?? "That didn't save. Try again.");
+      return;
+    }
     void refresh();
   }
 
+  async function addSymbol(symbol: string) {
+    const upper = symbol.trim().toUpperCase();
+    if (!upper || symbols.includes(upper)) return;
+    await mutate(upper, "POST");
+  }
+
   async function removeSymbol(symbol: string) {
-    await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" });
-    void refresh();
+    await mutate(symbol, "DELETE");
   }
 
   const hasQuotes = Object.keys(live.bySymbol).length > 0;
@@ -222,6 +248,9 @@ export function WatchlistPanel({ user }: { user: AuthUser | null }) {
             </p>
           )}
         </div>
+      )}
+      {error && (
+        <p className="border-t border-border px-3 py-1 text-[11px] text-down">{error}</p>
       )}
     </Panel>
   );
