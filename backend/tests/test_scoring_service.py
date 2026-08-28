@@ -4,14 +4,16 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, Company, Industry, Score, ScoreProfile
+from app.db.models import Asset, Company, FinancialMetric, Industry, Score, ScoreProfile
 from app.domain.models import AssetRef, Bar, Ratios
 from app.engines.scoring.registry import DEFAULT_WEIGHTS, FINANCIALS_WEIGHTS
 from app.providers.india.nse_actions import NSECorporateActionsProvider
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
+from app.services.fundamentals import MIN_SECTOR_SAMPLE
 from app.services.scoring import (
+    gather_score_inputs,
     get_active_profile,
     get_or_compute_score,
     resolve_profile_for_asset,
@@ -344,3 +346,118 @@ def test_todays_score_boundary_is_measured_in_utc_not_server_local_time(
         # explicit reset or every later test inherits the forced zone.
         monkeypatch.undo()
         time_module.tzset()
+
+
+def _seed_peer(db: Session, symbol: str, industry: Industry, metric: str, value: float) -> None:
+    """A bare peer asset with just one stored FinancialMetric row — enough
+    to be a member of the peer group get_sector_ratio_values queries,
+    without needing the full technicals/fundamentals stack this file's own
+    _make_asset-scored assets go through."""
+    peer = Asset(symbol=symbol, exchange="NSE", market="IN", name=symbol)
+    db.add(peer)
+    db.flush()
+    db.add(Company(asset_id=peer.id, industry_id=industry.id))
+    db.add(
+        FinancialMetric(
+            asset_id=peer.id,
+            metric=metric,
+            value=Decimal(str(value)),
+            source="test",
+            confidence="low",
+        )
+    )
+    db.flush()
+
+
+def test_gather_score_inputs_uses_peer_percentile_once_enough_peers_exist(db: Session) -> None:
+    asset = _make_asset(db, "ZZSCOREPEER1")
+    industry = _classify(db, asset, "ZZPEERIND1", "default")
+    # This asset's own trailingPE (22.0, from the autouse fundamentals
+    # stub) plus MIN_SECTOR_SAMPLE-1 cheaper peers, so it ranks at the
+    # bottom of its own peer group on price — a low percentile despite
+    # 22.0 scoring a respectable ~64 on the absolute band.
+    assert MIN_SECTOR_SAMPLE >= 2
+    for i in range(MIN_SECTOR_SAMPLE - 1):
+        _seed_peer(db, f"ZZPEER1{i}", industry, "trailingPE", 5.0 + i)
+
+    inputs = gather_score_inputs(db, asset)
+
+    assert inputs.trailing_pe == pytest.approx(22.0)
+    assert inputs.trailing_pe_percentile is not None
+    # 22.0 is the most expensive in its own peer group (itself included).
+    assert inputs.trailing_pe_percentile == pytest.approx(100.0 / MIN_SECTOR_SAMPLE)
+
+
+def test_gather_score_inputs_leaves_percentile_none_below_minimum_sample(db: Session) -> None:
+    asset = _make_asset(db, "ZZSCOREPEER2")
+    industry = _classify(db, asset, "ZZPEERIND2", "default")
+    for i in range(MIN_SECTOR_SAMPLE - 2):  # one short of the minimum, including this asset
+        _seed_peer(db, f"ZZPEER2{i}", industry, "trailingPE", 10.0 + i)
+
+    inputs = gather_score_inputs(db, asset)
+
+    assert inputs.trailing_pe == pytest.approx(22.0)
+    assert inputs.trailing_pe_percentile is None
+
+
+def test_gather_score_inputs_never_computes_percentiles_for_an_unclassified_asset(
+    db: Session,
+) -> None:
+    asset = _make_asset(db, "ZZSCOREPEER3")  # no Company/Industry row at all
+
+    inputs = gather_score_inputs(db, asset)
+
+    assert inputs.trailing_pe_percentile is None
+    assert inputs.price_to_book_percentile is None
+    assert inputs.debt_to_equity_percentile is None
+    assert inputs.gross_margins_percentile is None
+    assert inputs.revenue_growth_percentile is None
+    assert inputs.earnings_growth_percentile is None
+
+
+def test_gather_score_inputs_peer_cache_avoids_requerying(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset1 = _make_asset(db, "ZZSCOREPEER4")
+    asset2 = _make_asset(db, "ZZSCOREPEER5")
+    industry = _classify(db, asset1, "ZZPEERIND4", "default")
+    db.add(Company(asset_id=asset2.id, industry_id=industry.id))
+    db.flush()
+    for i in range(MIN_SECTOR_SAMPLE):
+        _seed_peer(db, f"ZZPEER4{i}", industry, "trailingPE", 15.0 + i)
+
+    import app.services.scoring as scoring_module
+
+    call_count = 0
+    real = scoring_module.get_sector_ratio_values
+
+    def _counting(*args: object, **kwargs: object) -> list[float]:
+        nonlocal call_count
+        call_count += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(scoring_module, "get_sector_ratio_values", _counting)
+
+    cache: dict = {}
+    gather_score_inputs(db, asset1, peer_cache=cache)
+    gather_score_inputs(db, asset2, peer_cache=cache)
+
+    # 6 metrics queried once each for asset1; asset2 (same industry) must
+    # reuse every one of them from the cache rather than requerying.
+    assert call_count == 6
+
+
+def test_gather_score_inputs_lower_is_better_metrics_are_inverted(db: Session) -> None:
+    """A cheap P/B (low raw value) must land on a HIGH percentile — every
+    ScoreInputs field means "higher = more attractive," peer percentiles
+    included."""
+    asset = _make_asset(db, "ZZSCOREPEER6")
+    industry = _classify(db, asset, "ZZPEERIND6", "default")
+    # This asset's own priceToBook (2.5, from the autouse stub) is the
+    # cheapest in its peer group.
+    for i in range(MIN_SECTOR_SAMPLE - 1):
+        _seed_peer(db, f"ZZPEER6{i}", industry, "priceToBook", 10.0 + i)
+
+    inputs = gather_score_inputs(db, asset)
+
+    assert inputs.price_to_book_percentile == pytest.approx(100.0)

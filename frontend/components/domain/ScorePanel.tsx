@@ -67,11 +67,15 @@ export function ScorePanel({ score, meta }: { score: Score; meta: Meta }) {
 
   // Deliberately specific rather than a generic "scores are approximate"
   // hedge: technical_setup + participation are the same functions at the
-  // same combined weight in every profile, so that half genuinely is
-  // comparable across industries and only the fundamental half isn't.
+  // same combined weight in every profile, so that half is always
+  // comparable across industries. The fundamental half ranks against
+  // same-industry peers when enough of them have data (backend/app/
+  // engines/scoring/percentile.py) and falls back to a fixed scale
+  // otherwise — so its comparability depends on how much peer coverage
+  // exists, not on the profile alone.
   const footnote = profileLabel
-    ? `Scored with the ${profileLabel} profile: components that don't mean the same thing for this industry are excluded rather than reweighted. The decline-setup and participation components are identical across industries; the fundamental ones are most directly comparable within an industry. Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero.`
-    : "Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero.";
+    ? `Scored with the ${profileLabel} profile: components that don't mean the same thing for this industry are excluded rather than reweighted. The decline-setup and participation components are identical across industries. The fundamental components rank against same-industry peers where enough peer data exists, and fall back to a fixed scale otherwise. Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero.`
+    : "Research attractiveness — not a predicted return, and not a buy/sell/hold recommendation. Fundamental components rank against same-industry peers where enough peer data exists, and fall back to a fixed scale otherwise. Components renormalize over whatever data exists, so coverage below 100% means some inputs were unavailable, not that they scored zero.";
 
   return (
     <Panel

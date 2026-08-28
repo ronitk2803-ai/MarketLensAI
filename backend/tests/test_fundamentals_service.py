@@ -14,6 +14,7 @@ from app.services.fundamentals import (
     get_or_fetch_ratios,
     get_or_fetch_statements,
     get_sector_ratio_stats,
+    get_sector_ratio_values,
 )
 
 
@@ -411,3 +412,68 @@ def test_get_sector_ratio_stats_only_counts_the_requested_metric(db: Session) ->
     stats = get_sector_ratio_stats(db, industry.id, "forwardPE")
 
     assert stats is None  # only trailingPE was seeded
+
+
+def _seed_company_with_metric(
+    db: Session, symbol: str, industry: Industry, metric: str, value: float
+) -> None:
+    asset = Asset(symbol=symbol, exchange="NSE", market="IN", name=symbol)
+    db.add(asset)
+    db.flush()
+    db.add(Company(asset_id=asset.id, industry_id=industry.id))
+    db.add(
+        FinancialMetric(
+            asset_id=asset.id,
+            metric=metric,
+            value=Decimal(str(value)),
+            source="yfinance_fundamentals",
+            confidence="low",
+        )
+    )
+    db.flush()
+
+
+def test_get_sector_ratio_values_returns_every_stored_value(db: Session) -> None:
+    industry = Industry(code="ZZSECTOR5", name="Test Sector 5")
+    db.add(industry)
+    db.flush()
+    for i, pe in enumerate([10.0, 20.0, 30.0]):
+        _seed_company_with_metric(db, f"ZZSEC5{i}", industry, "trailingPE", pe)
+
+    values = get_sector_ratio_values(db, industry.id, "trailingPE")
+
+    assert sorted(values) == [10.0, 20.0, 30.0]
+
+
+def test_get_sector_ratio_values_excludes_non_positive_by_default(db: Session) -> None:
+    industry = Industry(code="ZZSECTOR6", name="Test Sector 6")
+    db.add(industry)
+    db.flush()
+    _seed_company_with_metric(db, "ZZSEC6A", industry, "trailingPE", 20.0)
+    _seed_company_with_metric(db, "ZZSEC6B", industry, "trailingPE", -5.0)
+    _seed_company_with_metric(db, "ZZSEC6C", industry, "trailingPE", 0.0)
+
+    assert get_sector_ratio_values(db, industry.id, "trailingPE") == [20.0]
+
+
+def test_get_sector_ratio_values_keeps_negatives_when_not_positive_only(db: Session) -> None:
+    """Growth metrics need this — a company with declining revenue must
+    stay in the peer distribution, not be excluded from it."""
+    industry = Industry(code="ZZSECTOR7", name="Test Sector 7")
+    db.add(industry)
+    db.flush()
+    _seed_company_with_metric(db, "ZZSEC7A", industry, "revenueGrowth", 0.10)
+    _seed_company_with_metric(db, "ZZSEC7B", industry, "revenueGrowth", -0.20)
+
+    values = get_sector_ratio_values(db, industry.id, "revenueGrowth", positive_only=False)
+
+    assert sorted(values) == [-0.20, 0.10]
+
+
+def test_get_sector_ratio_values_only_counts_the_requested_metric(db: Session) -> None:
+    industry = Industry(code="ZZSECTOR8", name="Test Sector 8")
+    db.add(industry)
+    db.flush()
+    _seed_company_with_metric(db, "ZZSEC8A", industry, "trailingPE", 20.0)
+
+    assert get_sector_ratio_values(db, industry.id, "priceToBook") == []

@@ -171,6 +171,46 @@ def test_every_seeded_profile_sums_to_one() -> None:
         assert sum(weights.values()) == pytest.approx(1.0), industry_code
 
 
+def test_valuation_prefers_the_peer_percentile_over_the_absolute_band() -> None:
+    # A P/B of 3.5 alone scores 50 on the absolute band (see the first
+    # test above), but a precomputed percentile of 90 must win outright —
+    # gather_score_inputs already oriented it (higher = cheaper-than-peers)
+    # by the time it reaches ScoreInputs.
+    result = valuation(ScoreInputs(price_to_book=3.5, price_to_book_percentile=90.0))
+    assert result == pytest.approx(90.0)
+
+
+def test_valuation_falls_back_to_absolute_band_without_a_percentile() -> None:
+    assert valuation(ScoreInputs(price_to_book=3.5)) == pytest.approx(50.0)
+
+
+def test_fundamental_quality_prefers_percentile_leg_by_leg() -> None:
+    # Debt leg has a percentile (used directly); margin leg doesn't (falls
+    # back to the absolute band) — both legs blend as normal.
+    result = fundamental_quality(
+        ScoreInputs(debt_to_equity_percentile=80.0, gross_margins=0.40)
+    )
+    assert result == pytest.approx((80.0 + 100.0) / 2)
+
+
+def test_earnings_valuation_prefers_percentile_but_still_excludes_non_positive_pe() -> None:
+    assert earnings_valuation(
+        ScoreInputs(trailing_pe=25.0, trailing_pe_percentile=70.0)
+    ) == pytest.approx(70.0)
+    # A percentile computed some other way must never override a
+    # non-positive P/E — that company has no multiple, peer-relative or not.
+    assert earnings_valuation(
+        ScoreInputs(trailing_pe=-10.0, trailing_pe_percentile=70.0)
+    ) is None
+
+
+def test_growth_prefers_percentile_leg_by_leg() -> None:
+    result = growth(
+        ScoreInputs(revenue_growth_percentile=90.0, earnings_growth=0.0)
+    )
+    assert result == pytest.approx((90.0 + 50.0) / 2)
+
+
 def test_financials_profile_drops_fundamental_quality_and_keeps_technicals_comparable() -> None:
     """The two design claims that justify this profile existing at all: it
     excludes the component whose legs are structurally invalid for a

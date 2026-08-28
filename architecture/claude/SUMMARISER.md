@@ -4,12 +4,14 @@
 > pending, and how to get it running on your machine. Codename `mlai`; the
 > product name in the UI is **MarketLens AI**. Nothing is hard-coded to a brand.
 >
-> **Status as of 2026-08-27:** P0 and P1 complete. P2 is 4 of 7 steps done.
-> Auth has since been extended beyond the original P1 scope with email
-> verification, password reset and Google sign-in (§8.2 for the keys needed).
-> The app runs end-to-end in containers on a developer machine against a live
-> 500-company database with 5 years of prices. **It is not deployed to a
-> public server yet** — see §8.
+> **Status as of 2026-08-29:** P0 and P1 complete. P2 is 4 of 7 numbered steps
+> done, plus peer-percentile normalization (§X.4) and a general rate limiter,
+> both also done. Auth has been extended beyond the original P1 scope with
+> email verification, password reset and Google sign-in (§8.2 for the keys
+> needed). The corporate-actions data gap (§9.1, the highest-impact known
+> data bug) is fixed. The app runs end-to-end in containers on a developer
+> machine against a live 500-company database with 5 years of prices.
+> **It is not deployed to a public server yet** — see §8.
 
 ---
 
@@ -99,7 +101,7 @@ The API never imports providers or DB models directly; engines never do IO.
 | 25 | NL research assistant | ❌ **Blocked** on the Gemini key — §8.2 |
 | 26 | Score backtesting | ❌ Not started |
 | 27 | Upstox intraday / WebSocket | ❌ Not started |
-| — | Peer-percentile normalization (§X.4) | ❌ Not started |
+| — | Peer-percentile normalization (§X.4) | ✅ 2026-08-29 |
 
 ### 4.2 API surface (39 endpoints)
 
@@ -478,10 +480,11 @@ that bar on measured evidence (D/E median 1.81× vs 0.08–0.49× elsewhere).
 `information-technology` and `manufacturing` were tested and rejected. Full
 reasoning in `app/engines/scoring/registry.py`'s docstring.
 
-The genuine gap this leaves is **peer-percentile normalization** (§X.4, still
-unbuilt): thresholds inside components are absolute, so the technical half of
-the score is exactly comparable across industries and the fundamental half is
-only approximately so.
+The gap this used to leave — **peer-percentile normalization** (§X.4) — is
+closed as of 2026-08-29: the fundamental components now rank against
+same-industry peers when at least 3 have stored data, falling back to the
+old absolute bands otherwise. See `Build_plan.md` §X.4 for the design and
+`app/services/scoring.py`/`app/engines/scoring/percentile.py` for the code.
 
 ### 9.5 Deferred by design, with reasons recorded
 
@@ -529,6 +532,14 @@ disagree.
    proven; needs account creation (Neon/Render/Vercel) only a human can do.
 4. ~~Add a rate limiter~~ — **done**, see §8.3's own note (in-memory token
    bucket, two-layer: global backstop + per-route ceilings).
-5. Then the remaining P2: step 26 (score backtesting), step 27 (Upstox
-   intraday/WebSocket — needs API access), peer-percentile normalization
-   (§X.4/§9.4).
+5. ~~Peer-percentile normalization~~ — **done 2026-08-29**, see §9.4/§X.4.
+6. **Score backtesting (step 26) — checked 2026-08-29, deliberately not
+   started yet.** The `score` table holds only 5 distinct daily snapshots
+   (2026-08-23 through -28) across 260 assets at last check — building a
+   backtest against that would produce numbers that *look* like validation
+   but aren't; there isn't enough independent daily history yet for a
+   score-vs-forward-return correlation to mean anything. Revisit once
+   `score` has months of accumulated snapshots (the daily job is already
+   building that history every run — this is a "wait," not a blocker).
+7. **Upstox intraday/WebSocket (step 27)** — still needs live Upstox API
+   access to build against; not attempted blind.

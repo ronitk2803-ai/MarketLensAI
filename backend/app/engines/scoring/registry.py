@@ -39,12 +39,18 @@ Deliberately NOT seeded, having failed the same test:
   - power, despite a 1.51x median D/E: unlike a bank's, a utility's
     leverage is genuine financial risk, so scoring it as such is correct.
 
-Thresholds inside each component remain absolute, not peer-relative, so
-scores stay only approximately comparable across industries — the
+Thresholds inside each component were absolute, not peer-relative, so
+scores stayed only approximately comparable across industries — the
 technical half (technical_setup + participation, identical functions at an
-identical combined 0.30 in every profile) is exactly comparable, the
-fundamental half is not. Peer-percentile normalization (§L, §X.4) is the
-separate, still-unbuilt P2 item that would close that gap.
+identical combined 0.30 in every profile) was exactly comparable, the
+fundamental half was not. Peer-percentile normalization (§L, §X.4) closed
+that gap 2026-08-29: `app/engines/scoring/percentile.py` +
+`app/services/scoring.py`'s `gather_score_inputs` rank valuation,
+leverage, margin and growth legs against same-industry peers when at
+least `MIN_SECTOR_SAMPLE` (3) peers have a stored value, falling back to
+the absolute band below leg-by-leg otherwise — an unclassified asset, or
+one in a thin-coverage industry, degrades to exactly today's behavior
+rather than losing a component outright.
 """
 
 DEFAULT_WEIGHTS: dict[str, float] = {

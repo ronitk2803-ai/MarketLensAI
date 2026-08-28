@@ -462,7 +462,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 25. ❌ NL research assistant — **blocked** on the same Gemini key (§U.12). Design and tool surface already exist.
 26. ❌ Score backtesting.
 27. ❌ Upstox intraday/WebSocket — needs API access.
-— ❌ Peer-percentile normalization (§X.4).
+— ✅ Peer-percentile normalization (§X.4), 2026-08-29.
 
 ---
 
@@ -575,8 +575,11 @@ database, but has never been hosted.*
 ### X.3 Score-Input Snapshotting *(baked into P0 scoring engine)*
 - Persist component inputs + weights on every score computation → future backtesting/optimization without reconstructing history.
 
-### X.4 Peer / Industry Percentile Normalization *(P0 where feasible, expanded P2)*
-- Normalize metrics to percentile rank within industry so raw numbers become insight.
+### X.4 Peer / Industry Percentile Normalization *(P2 — built 2026-08-29)*
+- **Purpose:** the fundamental half of the score (valuation, leverage, margin, growth) used the same fixed absolute bands for every industry — a P/E of 25 scored identically for an IT firm (Nifty 500 median ~28) and a PSU bank (median nearer 8). `registry.py`'s own docstring named this the one respect in which the score wasn't "exactly comparable across industries," unlike the technical half.
+- **Design:** `app/engines/scoring/percentile.py`'s `percentile_rank(value, peers)` is a pure, direction-agnostic rank function; `app/services/fundamentals.py`'s `get_sector_ratio_values` gathers the peer distribution (same-industry `FinancialMetric` rows, positive-only by default — a non-positive P/E/P/B/D/E isn't a smaller version of the ratio, it isn't the ratio at all; growth metrics opt out of that filter, since a declining-revenue peer belongs in the comparison, not excluded from it). `app/services/scoring.py`'s `gather_score_inputs` computes each of the six percentiles (orienting "lower is better" metrics via negation, not `100 - rank` — the two aren't exact inverses at small N) and only uses one when the industry has at least `MIN_SECTOR_SAMPLE` (3) peers with data; below that, `components.py` falls back leg-by-leg to the pre-existing absolute band, so an unclassified asset or a thin-coverage industry degrades to exactly the old behavior rather than losing a component.
+- **Verified live** against the reachable dev database, hand-derived by symbol.
+- **Not done:** the `/score` API's `inputs` payload now exposes each percentile (`price_to_book_percentile` etc.), but no frontend UI surfaces them yet beyond `ScorePanel`'s updated footnote — a per-component "ranked vs. peers" badge is a natural follow-on, not built here.
 
 ### X.5 Provider-Health Monitoring *(baked into P0 via `provider_fetch_log`)*
 - Track per-provider success/latency/staleness → early warning when a free source (Upstox token, Bhavcopy format) breaks.

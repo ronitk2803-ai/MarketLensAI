@@ -423,6 +423,17 @@ export interface ScoreInputs {
   trailing_pe: number | null;
   relative_volume: number | null;
   delivery_pct: number | null;
+  /** Peer-percentile normalization (§L/§X.4) — 0-100, already oriented so
+   * higher always means "more attractive." null whenever the asset's
+   * industry had fewer than MIN_SECTOR_SAMPLE peers with a stored value
+   * for that metric, in which case the matching component in `components`
+   * was scored off the absolute band instead of ranked against peers. */
+  price_to_book_percentile: number | null;
+  trailing_pe_percentile: number | null;
+  debt_to_equity_percentile: number | null;
+  gross_margins_percentile: number | null;
+  revenue_growth_percentile: number | null;
+  earnings_growth_percentile: number | null;
 }
 
 /** Which weighting profile scored this company (Build_plan.md §M).

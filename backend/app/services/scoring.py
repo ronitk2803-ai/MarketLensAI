@@ -20,12 +20,35 @@ from app.engines.indicators import relative_volume as compute_relative_volume
 from app.engines.scoring.aggregate import compute_score
 from app.engines.scoring.base import ScoreInputs, ScoreResult
 from app.engines.scoring.components import COMPONENT_FUNCS
+from app.engines.scoring.percentile import percentile_rank
 from app.engines.scoring.registry import DEFAULT_WEIGHTS
 from app.services.adjusted_prices import get_adjusted_bars
-from app.services.fundamentals import get_or_fetch_ratios
+from app.services.fundamentals import (
+    MIN_SECTOR_SAMPLE,
+    get_or_fetch_ratios,
+    get_sector_ratio_values,
+)
 from app.services.technicals import compute_technicals
 
 logger = logging.getLogger(__name__)
+
+# metric -> (positive_only, invert). invert=True means lower raw values are
+# more attractive (valuation multiples, leverage), so _peer_percentile
+# ranks the *negated* value/peers instead of the raw ones (see its own
+# docstring for why that's not the same as `100 - rank`) before the result
+# reaches ScoreInputs — every field there means "higher = more attractive,"
+# and peer percentiles have to honor that same convention or components.py's
+# fallback-vs-peer branches would silently disagree on direction.
+_PEER_METRIC_CONFIG: dict[str, tuple[bool, bool]] = {
+    "priceToBook": (True, True),
+    "trailingPE": (True, True),
+    "debtToEquity": (True, True),
+    "grossMargins": (True, False),
+    "revenueGrowth": (False, False),
+    "earningsGrowth": (False, False),
+}
+
+PeerCache = dict[tuple[int, str], list[float]]
 
 DEFAULT_PROFILE_KEY = "default"
 
@@ -93,12 +116,72 @@ def resolve_profile_for_asset(
     return profile
 
 
-def gather_score_inputs(db: Session, asset: Asset) -> ScoreInputs:
+def _industry_id(asset: Asset) -> int | None:
+    company = asset.company
+    return company.industry_id if company is not None else None
+
+
+def _peer_percentile(
+    db: Session,
+    industry_id: int | None,
+    metric: str,
+    own_value: float | None,
+    *,
+    cache: PeerCache | None,
+) -> float | None:
+    """None whenever peer treatment doesn't apply — components.py's
+    fallback to the absolute band is what actually handles that case, this
+    function never fabricates a rank to avoid returning None."""
+    if industry_id is None or own_value is None:
+        return None
+    positive_only, invert = _PEER_METRIC_CONFIG[metric]
+    if positive_only and own_value <= 0:
+        return None
+
+    key = (industry_id, metric)
+    if cache is not None and key in cache:
+        peers = cache[key]
+    else:
+        peers = get_sector_ratio_values(db, industry_id, metric, positive_only=positive_only)
+        if cache is not None:
+            cache[key] = peers
+    # Below MIN_SECTOR_SAMPLE a "percentile" is really just whatever
+    # happened to be cached — same reasoning as get_sector_ratio_stats's
+    # own gate, and the same constant, not a second arbitrary number.
+    if len(peers) < MIN_SECTOR_SAMPLE:
+        return None
+
+    if invert:
+        # NOT `100 - percentile_rank(own_value, peers)` — that shortcut is
+        # off by 100/N versus this, because percentile_rank's "at or
+        # below" convention isn't its own exact inverse. Negating both the
+        # value and every peer instead makes "higher (negated) = better"
+        # apply uniformly, so the cheapest/least-levered peer in a small
+        # group lands on exactly 100 rather than 100 - 100/N, matching the
+        # highest-margin/fastest-growing peer in the non-inverted case
+        # landing on exactly 100 too.
+        return percentile_rank(-own_value, [-p for p in peers])
+    return percentile_rank(own_value, peers)
+
+
+def gather_score_inputs(
+    db: Session, asset: Asset, *, peer_cache: PeerCache | None = None
+) -> ScoreInputs:
     """Public: also used by company_summary.py's AI-summary prompt and the
     score API's explainer payload, so the score, its breakdown, and the
     summary all ground out in the exact same numbers rather than three
-    independently-computed views that could quietly drift apart."""
+    independently-computed views that could quietly drift apart.
+
+    `peer_cache` is for the daily job, which resolves ~500 assets against a
+    much smaller number of distinct industries — same rationale as
+    resolve_profile_for_asset's `cache` param, and the same pattern:
+    per-request callers pass nothing and take the extra queries.
+    """
     technicals = compute_technicals(db, asset, lookback_days=120)
+    # Must run before any peer-percentile query below: this asset's own
+    # ratios are upserted (and flushed) here, which is what makes it a
+    # member of its own peer group's query result, not an outsider being
+    # ranked against a distribution it isn't part of.
     ratio_rows = {r.metric: float(r.value) for r in get_or_fetch_ratios(db, asset)}
 
     # compute_technicals's snapshot doesn't carry volume/delivery% (it's
@@ -112,6 +195,8 @@ def gather_score_inputs(db: Session, asset: Asset) -> ScoreInputs:
         rv_series = compute_relative_volume([b.volume for b in bars], window=20)
         relative_volume = rv_series[-1]
         delivery_pct = bars[-1].delivery_pct
+
+    industry_id = _industry_id(asset)
 
     return ScoreInputs(
         rsi14=technicals.snapshot.rsi14,
@@ -128,6 +213,24 @@ def gather_score_inputs(db: Session, asset: Asset) -> ScoreInputs:
         trailing_pe=ratio_rows.get("trailingPE"),
         relative_volume=relative_volume,
         delivery_pct=delivery_pct,
+        price_to_book_percentile=_peer_percentile(
+            db, industry_id, "priceToBook", ratio_rows.get("priceToBook"), cache=peer_cache
+        ),
+        trailing_pe_percentile=_peer_percentile(
+            db, industry_id, "trailingPE", ratio_rows.get("trailingPE"), cache=peer_cache
+        ),
+        debt_to_equity_percentile=_peer_percentile(
+            db, industry_id, "debtToEquity", ratio_rows.get("debtToEquity"), cache=peer_cache
+        ),
+        gross_margins_percentile=_peer_percentile(
+            db, industry_id, "grossMargins", ratio_rows.get("grossMargins"), cache=peer_cache
+        ),
+        revenue_growth_percentile=_peer_percentile(
+            db, industry_id, "revenueGrowth", ratio_rows.get("revenueGrowth"), cache=peer_cache
+        ),
+        earnings_growth_percentile=_peer_percentile(
+            db, industry_id, "earningsGrowth", ratio_rows.get("earningsGrowth"), cache=peer_cache
+        ),
     )
 
 
@@ -156,7 +259,11 @@ def _todays_score(db: Session, asset_id: int, profile_id: int) -> Score | None:
 
 
 def get_or_compute_score(
-    db: Session, asset: Asset, *, profile_cache: dict[str, ScoreProfile] | None = None
+    db: Session,
+    asset: Asset,
+    *,
+    profile_cache: dict[str, ScoreProfile] | None = None,
+    peer_cache: PeerCache | None = None,
 ) -> tuple[Score, list[ScoreComponent]]:
     profile = resolve_profile_for_asset(db, asset, cache=profile_cache)
 
@@ -168,7 +275,7 @@ def get_or_compute_score(
         components = db.query(ScoreComponent).filter_by(score_id=existing.id).all()
         return existing, components
 
-    inputs = gather_score_inputs(db, asset)
+    inputs = gather_score_inputs(db, asset, peer_cache=peer_cache)
     result: ScoreResult = compute_score(inputs, profile.weights)
 
     confidence = "high" if result.coverage >= 0.6 else "low"

@@ -38,6 +38,22 @@ class ScoreInputs:
     relative_volume: float | None = None
     delivery_pct: float | None = None
 
+    # Peer-percentile normalization (§L/§X.4) — 0-100, already oriented so
+    # higher always means "more attractive," same convention as every
+    # normalized component value. None when the asset's industry has fewer
+    # than app.services.fundamentals.MIN_SECTOR_SAMPLE peers with a stored
+    # value for that metric (components.py falls back to the absolute
+    # threshold in that case, never a fabricated rank). Computed in
+    # app/services/scoring.py's gather_score_inputs, not here — this
+    # dataclass only carries data, per-asset DB/peer-group IO doesn't
+    # belong in the pure engine layer.
+    price_to_book_percentile: float | None = None
+    trailing_pe_percentile: float | None = None
+    debt_to_equity_percentile: float | None = None
+    gross_margins_percentile: float | None = None
+    revenue_growth_percentile: float | None = None
+    earnings_growth_percentile: float | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class ComponentResult:

@@ -326,6 +326,19 @@ def get_score(symbol: str, db: Session = Depends(get_db)) -> dict:
             "trailing_pe": inputs.trailing_pe,
             "relative_volume": inputs.relative_volume,
             "delivery_pct": inputs.delivery_pct,
+            # Peer-percentile normalization (§L/§X.4) — 0-100, already
+            # oriented so higher always means "more attractive." None
+            # whenever the asset's industry has fewer than
+            # MIN_SECTOR_SAMPLE peers with a stored value for that metric,
+            # in which case the corresponding component above was scored
+            # off the absolute band instead — see
+            # app/engines/scoring/components.py.
+            "price_to_book_percentile": inputs.price_to_book_percentile,
+            "trailing_pe_percentile": inputs.trailing_pe_percentile,
+            "debt_to_equity_percentile": inputs.debt_to_equity_percentile,
+            "gross_margins_percentile": inputs.gross_margins_percentile,
+            "revenue_growth_percentile": inputs.revenue_growth_percentile,
+            "earnings_growth_percentile": inputs.earnings_growth_percentile,
         },
     }
     return _envelope(data, source="mlai_scoring_v1", confidence=score.confidence)

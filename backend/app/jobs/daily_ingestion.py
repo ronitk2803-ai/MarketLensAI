@@ -36,7 +36,7 @@ from app.services.corporate_actions import (
     refresh_corporate_actions_from_nse,
 )
 from app.services.news import NewsRefreshResult, refresh_tracked_news
-from app.services.scoring import get_or_compute_score
+from app.services.scoring import PeerCache, get_or_compute_score
 from app.services.thesis import run_thesis_eval
 
 logger = logging.getLogger(__name__)
@@ -129,9 +129,18 @@ def run_daily_ingestion(
     # Resolved once per distinct profile rather than once per asset — there
     # are a couple of profiles across hundreds of assets.
     profile_cache: dict[str, ScoreProfile] = {}
+    # Same one-per-run-per-(industry,metric) sharing for peer-percentile
+    # normalization (app/services/scoring.py's gather_score_inputs) — 500
+    # assets x 6 metrics would otherwise be up to 3,000 peer queries a
+    # night instead of one per distinct industry actually scored. This
+    # does mean a peer list cached early in the loop won't see a later
+    # asset's freshly-refreshed ratio in *this same run* — self-corrects
+    # the next run, and the alternative (re-querying every asset) is the
+    # thing this cache exists to avoid.
+    peer_cache: PeerCache = {}
     for asset in assets:
         try:
-            get_or_compute_score(db, asset, profile_cache=profile_cache)
+            get_or_compute_score(db, asset, profile_cache=profile_cache, peer_cache=peer_cache)
             scores_computed += 1
         except Exception:
             scores_errors += 1

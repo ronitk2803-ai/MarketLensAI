@@ -418,6 +418,14 @@ def test_get_score_returns_value_and_components(seeded_asset: Asset) -> None:
         "trailing_pe",
         "relative_volume",
         "delivery_pct",
+        # Peer-percentile normalization (§L/§X.4) — null here since
+        # seeded_asset has no Company/Industry row, but always present.
+        "price_to_book_percentile",
+        "trailing_pe_percentile",
+        "debt_to_equity_percentile",
+        "gross_margins_percentile",
+        "revenue_growth_percentile",
+        "earnings_growth_percentile",
     }
     # Which weighting profile produced this score — profiles apply
     # different component sets, so the breakdown isn't interpretable

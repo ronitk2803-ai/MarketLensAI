@@ -204,3 +204,29 @@ def get_sector_ratio_stats(db: Session, industry_id: int, metric: str) -> Sector
     if len(values) < MIN_SECTOR_SAMPLE:
         return None
     return SectorRatioStats(median=statistics.median(values), sample_size=len(values))
+
+
+def get_sector_ratio_values(
+    db: Session, industry_id: int, metric: str, *, positive_only: bool = True
+) -> list[float]:
+    """Every stored `metric` value across the industry — the peer
+    distribution app/engines/scoring/percentile.py's `percentile_rank`
+    needs (§L/§X.4). Callers gate on `len(values) < MIN_SECTOR_SAMPLE`
+    themselves, same convention as `get_sector_ratio_stats`.
+
+    `positive_only` defaults True for the same reason
+    `get_sector_ratio_stats` is positive-only: a non-positive P/E, P/B or
+    D/E isn't a smaller version of the ratio, it's not the ratio at all
+    (see components.py's earnings_valuation). Growth metrics must pass
+    `positive_only=False` — a company with declining revenue is exactly
+    the case peer ranking should place near the bottom, not exclude from
+    the comparison entirely.
+    """
+    query = (
+        db.query(FinancialMetric.value)
+        .join(Company, Company.asset_id == FinancialMetric.asset_id)
+        .filter(Company.industry_id == industry_id, FinancialMetric.metric == metric)
+    )
+    if positive_only:
+        query = query.filter(FinancialMetric.value > 0)
+    return [float(v) for (v,) in query.all()]
