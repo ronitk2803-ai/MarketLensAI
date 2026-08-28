@@ -435,7 +435,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 3. ✅ Provider abstraction interfaces + registry + `provider_fetch_log` + unit tests (no impls).
 4. ✅ **Upstox provider**: `UpstoxTokenManager` + instruments dump → seed `asset`/`instrument_map`; daily historical candles. *(Token refresh stays semi-manual by design — §U.2.)*
 5. ✅ **NSE Bhavcopy provider**: auth-free EOD spine + delivery% (fallback + delivery data).
-6. ✅ Corporate-action ingestion + price adjustment (with tests — correctness-critical). *(Splits and bonuses only; the source feed misses bonuses and demergers — new risk §U.11.)*
+6. ✅ Corporate-action ingestion + price adjustment (with tests — correctness-critical). *(§U.11's feed gap — missing bonuses/demergers — resolved 2026-08-29: NSE is now the primary source.)*
 7. ✅ Indicator engine (DMA 20/50/100/200, RSI, MACD, volatility, drawdown, rel-strength/volume) — pure + unit-tested.
 8. ✅ API: search + company page (prices + technicals).
 9. ✅ Frontend: design tokens, layout, search, company page (price chart + technical panel + provenance affordance).
@@ -506,11 +506,11 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 9. **One-week timeline vs data plumbing reality.** Ingestion/quality is the long pole, not UI.
 10. **Regulatory (SEBI).** Research-analyst rules are stricter than a generic disclaimer. → deliberate "education/research, not advice" positioning + disclaimer; log the decision. *(Disclaimer copy is live in the UI; the formal positioning sign-off in §V.6 is still open.)*
 
-11. **Corporate-action feed is incomplete — NEW, 2026-08-26, and the highest-impact live data bug.** The adjustment engine is correct, but `yfinance_actions` **misses bonus issues and demergers entirely**, so a mechanical price drop is carried through as a real fall. Measured: BAJFINANCE −79.9% (2025-06-16, 4:1 bonus absent), ABFRL −66.6% (demerger, no non-dividend action on file), VEDL −64.9% (demerger), 360ONE −50.3% (raw 1773.30 → 441.05, a 4× move with only a 2× split recorded), BAJAJFINSV −47.9%, SIEMENS −42.9%. Of 1,306 detected falls, 32 (2.5%) contain a session ≤ −20%. This corrupts **every** price-derived number for those names in those windows — DMAs, RSI, volatility, drawdown, the `down_*` screens, `technical_setup`, and the chart. → Step 21 exposes the tell (`worst_session_pct`) rather than suppressing it, which is how this was found. **Real fix needs a source that reports bonuses and demergers (NSE's own corporate-actions endpoint).** Note §6 was about *wrong* adjustment; this is about *missing input*, and the tests for §6 cannot catch it.
+11. ~~**Corporate-action feed is incomplete.**~~ **RESOLVED 2026-08-29.** `yfinance_actions` missed bonus issues and demergers entirely (BAJFINANCE, ABFRL, VEDL, 360ONE, BAJAJFINSV, SIEMENS — see §9.1 history in `SUMMARISER.md` for the exact numbers). The believed-blocked NSE corporate-actions endpoint (`www.nseindia.com/api/corporates-corporateActions`) was re-verified live and is reachable via a plain `httpx.Client` — no cookie priming needed; whatever blocked it earlier isn't blocking it now. `app/providers/india/nse_actions.py` is now the primary source (yfinance stays as fallback), with a conservative subject-line classifier that only ever types a row "split"/"bonus" when a concrete ratio was parsed unambiguously — everything else (demergers, rights, unparseable text) is recorded under a type `adjustment.py` deliberately never adjusts, so the historical-falls panel's existing suspect-action flag now has something to flag instead of nothing. Live-verified against the dev database: 1,080 rows ingested, including 33 bonuses, 12 demergers and 22 rights issues yfinance had never recorded. One-time backfill: `python -m app.jobs.backfill_corporate_actions`; the daily job now also refreshes a rolling ~13-month window unconditionally, which additionally fixes a second latent bug (an asset with any stored action never got re-fetched, so a genuinely new future action would have gone uncaught).
 
 12. **AI provider key restricted — NEW, blocks steps 19 (runtime) and 25.** The Gemini key lists models fine (200 in ~0.6 s) but `generateContent` hangs or returns an empty-bodied 404, identically from host and container, with Google's own server headers. A Cloud-console API-key restriction, not a code/network/model problem. → Failure path hardened (bounded 45 s budget, `provider_fetch_log` recording, 10-minute negative cache, auth gate, real error text surfaced). Console fix documented in `SUMMARISER.md` §8.2.
 
-13. **No general rate limiter — NEW.** The auth gate is still the only bound on `POST /screener/run`. Partially mitigated since: `POST /ai-summary` now requires a *verified* account, and the code endpoints carry per-user throttles (60s spacing, 10/hour, 5 guesses per code, each committed before the error is raised so `get_db`'s rollback can't erase them). None of that is a general-purpose limiter. Must be closed before a public deploy.
+13. ~~**No general rate limiter.**~~ **RESOLVED.** `app/core/rate_limit.py` — an in-memory token bucket, two layers: a global ASGI-middleware backstop on every route plus tighter per-route ceilings on Tier A/C routes. See `SUMMARISER.md` §8.3.
 
 14. **Resend testing mode — NEW, and it fails in the direction that hides it.** Until a domain is verified at resend.com/domains, the default `onboarding@resend.dev` sender delivers only to the Resend account owner's own address and 403s for everyone else — so verification and password reset work perfectly for whoever is testing and fail for every real user. → The provider translates that 403 into a message naming the fix; `SUMMARISER.md` §8.2 states it as a prerequisite for public signup.
 
@@ -539,16 +539,16 @@ is verified end-to-end on `localhost:3100` against the real 500-company
 database, but has never been hosted.*
 
 - [ ] **Public URL** loads a clean, fast company page for any Nifty 500 stock. — **the one outstanding item.** Locally: ✅. Hosting checklist in `SUMMARISER.md` §8.1.
-- [x] Price chart renders **corporate-action-adjusted candlesticks** (Upstox primary, Bhavcopy fallback) with **visible split/bonus/dividend markers on ex-dates**; core technicals computed locally and correct (unit-tested). ⚠️ *Adjustment is correct but its input feed is incomplete — §U.11.*
+- [x] Price chart renders **corporate-action-adjusted candlesticks** (Upstox primary, Bhavcopy fallback) with **visible split/bonus/dividend markers on ex-dates**; core technicals computed locally and correct (unit-tested). *(§U.11's feed-completeness gap resolved 2026-08-29 — NSE is now the primary actions source.)*
 - [x] Fundamentals shown where available, **explicitly flagged** where not — **no fabricated numbers.**
 - [x] Relevant, deduplicated news per company.
 - [x] Opportunity Finder returns ranked candidates for standard screens over the Nifty 500.
 - [x] Opportunity Score displays with a **per-component breakdown**; missing data graceful; labeled "research attractiveness," not a return prediction.
 - [x] Daily ingestion runs unattended (APScheduler, 20:00 IST, 7 days a week); **pipeline does not break if the Upstox token lapses** (Bhavcopy spine); pages served from stored data.
 - [x] Every fact-bearing datapoint carries `source` + `as_of`; provenance visible in UI via `ProvenanceBadge`.
-- [~] No secrets in repo or frontend; admin endpoints gated. ⚠️ **Gated but NOT rate-limited — no rate limiter exists anywhere (§U.13).** Close before going public.
+- [x] No secrets in repo or frontend; admin endpoints gated. Rate-limited since §U.13 was resolved — see `app/core/rate_limit.py`.
 - [ ] CI green (lint + tests); README explains local setup incl. Upstox token bootstrap.
-- [ ] Disclaimer / positioning copy present.
+- [x] Disclaimer copy present — global footer, every AI/scoring panel's footnote, and transactional emails all now state "not a SEBI-registered investment adviser/research analyst" and "AI-generated content is for research/analytics purposes only" (2026-08-29). *(The copy is done; the underlying research-analyst **positioning** decision in §V.6 is a separate, still-open business/legal call.)*
 
 ---
 

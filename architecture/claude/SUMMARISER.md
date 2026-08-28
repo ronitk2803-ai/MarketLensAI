@@ -74,7 +74,7 @@ The API never imports providers or DB models directly; engines never do IO.
 | 3 | Provider abstraction + registry + `provider_fetch_log` | ✅ |
 | 4 | Upstox provider + token manager | ✅ (token is semi-manual by design) |
 | 5 | NSE Bhavcopy provider (EOD spine + delivery %) | ✅ |
-| 6 | Corporate-action ingestion + price adjustment | ✅ (splits/bonuses only — see §9.1) |
+| 6 | Corporate-action ingestion + price adjustment | ✅ (NSE primary since 2026-08-29 — see §9.1) |
 | 7 | Indicator engine (DMA/RSI/MACD/volatility/drawdown/relative) | ✅ |
 | 8 | Search + company-page API | ✅ |
 | 9 | Frontend: tokens, layout, search, company page | ✅ |
@@ -389,12 +389,14 @@ RSS are all free and unauthenticated.
 
 ### 8.3 Security / ops gaps
 
-- [ ] **No general rate limiter.** The auth gate is still the only bound on
-      `POST /screener/run`. `POST /ai-summary` now additionally requires a
-      *verified* account, and the verification/reset code endpoints carry their
-      own per-user throttles (60 s spacing, 10/hour, 5 guesses per code) — but
-      none of that is a general-purpose limiter, which the spec asks for three
-      times.
+- [x] **General rate limiter — done.** `app/core/rate_limit.py`: an
+      in-memory token bucket, two layers — a global ASGI-middleware backstop
+      on every route (~60/min per user-or-IP) plus tighter per-route ceilings
+      on Tier A/C routes (`/screener/run` ~3/hr, `/opportunities` ~20/min,
+      `/ai-summary` ~5/day, `/auth/register|login`, password-reset request).
+      `TRUST_FORWARDED_FOR` (default `false`) must be set `true` on
+      Render/Fly — see `Deployment.md` — or every visitor behind the host's
+      proxy shares one IP-keyed bucket.
 - [ ] `/admin/*` is a shared-secret header, not real RBAC.
 - [ ] No error tracking (Sentry or equivalent) and no uptime monitoring.
 - [ ] No backup/restore policy for the hosted database.
@@ -406,29 +408,46 @@ RSS are all free and unauthenticated.
 
 ## 9. Pending — known data & product gaps
 
-### 9.1 Corporate actions are incomplete (highest-impact data bug)
+### 9.1 Corporate actions were incomplete — RESOLVED 2026-08-29
 
-The `yfinance_actions` feed **misses bonus issues and demergers**. The
-adjustment engine itself is correct — verified live. Measured examples:
+The `yfinance_actions` feed **missed bonus issues and demergers**. The
+adjustment engine itself was always correct — this was a missing-input bug,
+not a wrong-math one. Affected: BAJFINANCE (2025-06-16, 4:1 bonus missing),
+ABFRL (2025-05-22 demerger, no action on file at all), VEDL (2026-04-30
+demerger), 360ONE (2023-03-02, only a 2× split recorded against a real 4×
+move), BAJAJFINSV (2022-09-13, 1:1 bonus missing), SIEMENS (2025-04-07,
+Siemens Energy India demerger).
 
-| Symbol | Date | Residual unexplained session | Cause |
-|---|---|---|---|
-| BAJFINANCE | 2025-06-16 | −79.9% | 4:1 bonus missing; only the 1:2 split on file |
-| ABFRL | 2025-05-22 | −66.6% | demerger; **no non-dividend action on file at all** |
-| VEDL | 2026-04-30 | −64.9% | demerger; none on file |
-| 360ONE | 2023-03-02 | −50.3% | raw close 1773.30 → 441.05 (4×); only a 2× split on file |
-| BAJAJFINSV | 2022-09-13 | −47.9% | 1:1 bonus missing |
-| SIEMENS | 2025-04-07 | −42.9% | Siemens Energy India demerger |
+**Fix:** `app/providers/india/nse_actions.py` — NSE's own
+`corporates-corporateActions` endpoint, previously believed blocked by
+Akamai at the TLS level (`yfinance_actions.py`'s old docstring, verified
+live 2026-08-23-or-earlier). Re-verified live 2026-08-29 with the same
+`httpx.Client` this codebase actually uses: the homepage still 403s, but
+the JSON API answers 200 directly, no cookie priming needed. Now the
+primary source (`app/services/corporate_actions.py`), yfinance stays as
+fallback. A conservative subject-line classifier only ever types a row
+`"split"`/`"bonus"` (the two types `adjustment.py` actually price-adjusts)
+when a concrete ratio parses unambiguously; a demerger/rights/unparseable
+row is recorded under a type that's deliberately left unadjusted but now
+*visible* — `HistoricalEventsPanel`'s existing suspect-action flag had
+nothing to flag before this, because these rows didn't exist at all.
 
-Scale: of 1,306 detected falls across the universe, 32 (2.5%) contain a single
-session ≤ −20% and 13 (1.0%) ≤ −25%; the deepest are dominated by these.
+Live-verified against the reachable dev database (not just mocks): the new
+`python -m app.jobs.backfill_corporate_actions` ingested 1,080 rows across
+301 assets, including 33 bonuses, 12 demergers and 22 rights issues yfinance
+had never recorded for any of them (HINDUNILVR's demerger, PATANJALI's 3:1
+bonus, LALPATHLAB's 2:1 bonus among them). The daily job now also refreshes
+a rolling ~13-month window unconditionally (one bulk HTTP call for the
+whole market, not 500), which incidentally fixed a second latent bug: the
+old per-asset lazy path only ever fetched once per asset, so a genuinely
+new action for an already-seeded asset was never caught by anything.
 
-**Impact is not limited to the new panel** — DMAs, RSI, volatility, drawdown,
-the `down_*` screens, `technical_setup` in the score, and the chart itself are
-all wrong for these names in the affected windows. The historical-falls panel
-surfaces it (`worst_session_pct`) rather than hiding it, which is how it was
-found. **Fix needs a corporate-actions source that reports bonuses and
-demergers — NSE's own endpoint is the obvious candidate.**
+**Still open:** the production database (500 companies, 5 years of history
+— the one this bug was originally measured against) has not yet had
+`backfill_corporate_actions` run against it; that database wasn't reachable
+from the environment this fix was built in. Run it once, post-deploy or
+against the podman prod stack, to retroactively correct BAJFINANCE/ABFRL/
+VEDL/etc.'s historical charts and indicators.
 
 ### 9.2 Fundamentals are single-source and shallow
 
@@ -501,9 +520,15 @@ disagree.
 ## 10. Suggested next steps
 
 1. **Fix the Gemini key** (§8.2) — one console change, unblocks step 25.
-2. **Fix corporate actions** (§9.1) — highest-impact data correctness work;
-   it silently corrupts indicators for a handful of large names today.
-3. **Deploy publicly** (§8.1) — the runbook is written and the images are proven.
-4. **Add a rate limiter** (§8.3) before the app is public.
+   Needs the user's Google Cloud console; not something a coding session
+   can do.
+2. ~~Fix corporate actions~~ — **done 2026-08-29**, see §9.1. Still needs
+   `python -m app.jobs.backfill_corporate_actions` run once against the
+   production database once it exists/is reachable.
+3. **Deploy publicly** (§8.1) — the runbook is written and the images are
+   proven; needs account creation (Neon/Render/Vercel) only a human can do.
+4. ~~Add a rate limiter~~ — **done**, see §8.3's own note (in-memory token
+   bucket, two-layer: global backstop + per-route ceilings).
 5. Then the remaining P2: step 26 (score backtesting), step 27 (Upstox
-   intraday/WebSocket — needs API access), peer-percentile normalization.
+   intraday/WebSocket — needs API access), peer-percentile normalization
+   (§X.4/§9.4).
