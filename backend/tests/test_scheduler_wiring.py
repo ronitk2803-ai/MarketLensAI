@@ -1,9 +1,18 @@
-"""Guards the one piece of this system that runs with nobody watching.
+"""Guards the pieces of this system that run with nobody watching.
 
 The scheduler is what keeps the deployment fresh after launch day, and its
 failure mode is silence — a wrong flag or a mistimed cron doesn't raise, it
 just means the data quietly stops updating. These assert the wiring rather
 than waiting on a clock.
+
+Two schedulers exist as of the rate limiter (app/core/rate_limit.py):
+`daily_ingestion`, gated behind settings.enable_scheduler like before, and
+`rate_limit_sweep`, which runs UNCONDITIONALLY — an unbounded rate-limiter
+dict is a memory-safety concern on a public deploy, not an opt-in feature,
+so it must exist even when a deployment has explicitly turned ingestion
+off. Tests below find each scheduler by its job's `id`, never by list
+index — `spy.instances[0]` stopped meaning "the ingestion scheduler" the
+moment a second, always-on scheduler was added ahead of it in lifespan.
 """
 
 import datetime as dt
@@ -44,21 +53,53 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> type[_SpyScheduler]:
     return _SpyScheduler
 
 
-def test_scheduler_is_off_by_default(
+def _scheduler_with_job(spy: type[_SpyScheduler], job_id: str) -> _SpyScheduler:
+    for instance in spy.instances:
+        if any(job.get("id") == job_id for job in instance.jobs):
+            return instance
+    raise AssertionError(f"no scheduler instance registered a job with id={job_id!r}")
+
+
+def test_the_sweep_scheduler_always_starts_regardless_of_enable_scheduler(
     spy: type[_SpyScheduler], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Importing the app must not start an unattended batch job.
+    """The rate-limiter sweep is not optional batch work like ingestion —
+    an unbounded caller-keyed dict is a memory-safety concern on a public
+    deploy, so it must run even when a deployment has explicitly turned
+    scheduling off."""
+    monkeypatch.setattr(main.settings, "enable_scheduler", False)
+
+    with TestClient(main.app):
+        sweep = _scheduler_with_job(spy, "rate_limit_sweep")
+
+    assert sweep.started
+    job = sweep.jobs[0]
+    assert job["trigger"] == "interval"
+    assert job["hours"] == 1
+    assert sweep.shutdown_called
+
+
+def test_ingestion_scheduler_is_off_by_default(
+    spy: type[_SpyScheduler], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Importing the app must not start an unattended ingestion batch job.
 
     Every test in this suite builds a TestClient, and a scheduler that
     defaulted to on would have each of them firing ingestion at the real
-    database.
+    database. The sweep scheduler above is exempt from this — see its own
+    test — so this checks specifically for the ABSENCE of a
+    daily_ingestion job, not the absence of every scheduler.
     """
     monkeypatch.setattr(main.settings, "enable_scheduler", False)
 
     with TestClient(main.app):
         pass
 
-    assert spy.instances == []
+    assert not any(
+        job.get("id") == "daily_ingestion"
+        for instance in spy.instances
+        for job in instance.jobs
+    )
 
 
 def test_enabling_the_scheduler_registers_the_daily_job(
@@ -68,8 +109,7 @@ def test_enabling_the_scheduler_registers_the_daily_job(
     monkeypatch.setattr(main.settings, "daily_ingestion_hour_ist", 20)
 
     with TestClient(main.app):
-        assert len(spy.instances) == 1
-        scheduler = spy.instances[0]
+        scheduler = _scheduler_with_job(spy, "daily_ingestion")
         assert scheduler.started
 
         job = scheduler.jobs[0]
@@ -92,7 +132,7 @@ def test_the_job_is_scheduled_in_ist_not_the_host_timezone(
     monkeypatch.setattr(main.settings, "enable_scheduler", True)
 
     with TestClient(main.app):
-        assert spy.instances[0].timezone == ZoneInfo("Asia/Kolkata")
+        assert _scheduler_with_job(spy, "daily_ingestion").timezone == ZoneInfo("Asia/Kolkata")
 
 
 def test_the_configured_hour_is_honoured(
@@ -102,7 +142,7 @@ def test_the_configured_hour_is_honoured(
     monkeypatch.setattr(main.settings, "daily_ingestion_hour_ist", 6)
 
     with TestClient(main.app):
-        assert spy.instances[0].jobs[0]["hour"] == 6
+        assert _scheduler_with_job(spy, "daily_ingestion").jobs[0]["hour"] == 6
 
 
 def test_a_missed_run_still_fires_within_the_grace_window(
@@ -116,7 +156,8 @@ def test_a_missed_run_still_fires_within_the_grace_window(
     monkeypatch.setattr(main.settings, "enable_scheduler", True)
 
     with TestClient(main.app):
-        assert spy.instances[0].jobs[0]["misfire_grace_time"] >= 3600
+        job = _scheduler_with_job(spy, "daily_ingestion").jobs[0]
+        assert job["misfire_grace_time"] >= 3600
 
 
 def test_the_scheduler_is_shut_down_with_the_app(
@@ -127,7 +168,7 @@ def test_the_scheduler_is_shut_down_with_the_app(
     with TestClient(main.app):
         pass
 
-    assert spy.instances[0].shutdown_called
+    assert _scheduler_with_job(spy, "daily_ingestion").shutdown_called
 
 
 def test_a_failing_run_does_not_escape_the_scheduled_job(
@@ -146,6 +187,21 @@ def test_a_failing_run_does_not_escape_the_scheduled_job(
     monkeypatch.setattr("app.jobs.daily_ingestion.run_daily_ingestion", boom)
 
     main._run_daily_ingestion_job()  # must not raise
+
+
+def test_a_failing_sweep_does_not_escape_the_scheduled_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same guarantee as ingestion's: a broken sweep must not silently end
+    all future sweeps, which would let the rate-limiter dict grow
+    unbounded again."""
+
+    def boom() -> int:
+        raise RuntimeError("simulated sweep failure")
+
+    monkeypatch.setattr("app.core.rate_limit.sweep_all", boom)
+
+    main._sweep_rate_limiters_job()  # must not raise
 
 
 def test_the_ist_hour_maps_to_the_expected_utc_instant() -> None:

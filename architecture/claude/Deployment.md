@@ -152,6 +152,7 @@ Both build from the `backend/Dockerfile` directly; pick one.
    | `UPSTOX_REDIRECT_URI` | must exactly match what's registered with Upstox — see §4 |
    | `ADMIN_TOKEN` | any long random string you generate — gates `/admin/*` |
    | `ENABLE_SCHEDULER` | `true` (Render's web service is always-on, so the in-process APScheduler default works — see §5 if you'd rather use Render's own Cron Job feature instead) |
+   | `TRUST_FORWARDED_FOR` | `true` — Render sits in front of this container as a real reverse proxy, so `X-Forwarded-For` genuinely reflects the visitor's IP here. This is the one rate-limiter setting (app/core/rate_limit.py) that's platform-dependent rather than optional-with-a-safe-default: get it wrong and every visitor is keyed on Render's own edge IP instead of their own, so they all share one rate-limit bucket. |
 
 5. Deploy. Watch the build logs for the `alembic upgrade head` line on
    container start — it should report no pending revisions (you already
@@ -166,7 +167,7 @@ cd backend
 fly launch --no-deploy   # generates fly.toml, pick the region/org interactively
 fly secrets set DATABASE_URL="..." CORS_ORIGINS="https://mlai.vercel.app" \
   UPSTOX_API_KEY="..." UPSTOX_API_SECRET="..." UPSTOX_REDIRECT_URI="..." \
-  ADMIN_TOKEN="..." ENABLE_SCHEDULER="true"
+  ADMIN_TOKEN="..." ENABLE_SCHEDULER="true" TRUST_FORWARDED_FOR="true"
 fly deploy
 ```
 Fly builds the same `backend/Dockerfile` — no separate `fly.toml` app

@@ -9,6 +9,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import rate_limited
 from app.core.security import get_current_verified_user
 from app.db.models import AppUser, Asset
 from app.db.session import get_db
@@ -243,7 +244,7 @@ def get_ai_summary(symbol: str, db: Session = Depends(get_db)) -> dict:
     return _envelope(data, source="gemini_summary", confidence="low")
 
 
-@router.post("/companies/{symbol}/ai-summary")
+@router.post("/companies/{symbol}/ai-summary", dependencies=[rate_limited("ai_summary")])
 def create_ai_summary(
     symbol: str,
     current_user: AppUser = Depends(get_current_verified_user),
@@ -257,11 +258,13 @@ def create_ai_summary(
     the app and than POST /screener/run, whose gate this used to share.
     The difference: a screener run is CPU we already own, while this is the
     only endpoint that can spend an LLM call against a rate-limited free
-    tier. With no rate limiter anywhere, "you must own a real inbox" is the
-    cheapest meaningful bound on someone burning that quota with throwaway
-    signups. Note this is not the "can't save anything" rule the other
-    gated endpoints implement — nothing is saved on the user's behalf here;
-    it is a cost control that happens to use the same dependency.
+    tier. "You must own a real inbox" is the cheapest meaningful bound on
+    someone burning that quota with throwaway signups; the "ai_summary"
+    limiter (app/core/rate_limit.py, ~5/day per user) is the second,
+    tighter one layered on top of it. Note this is not the "can't save
+    anything" rule the other gated endpoints implement — nothing is saved
+    on the user's behalf here; it is a cost control that happens to use
+    the same dependency.
 
     The GET below stays public: it only ever reads the cache and is free."""
     asset = _get_asset_or_404(db, symbol)

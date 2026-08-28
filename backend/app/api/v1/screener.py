@@ -7,10 +7,10 @@ time, which the homepage's four boards and the preset pills depend on.
 
 Sign-in required. This is the most expensive endpoint in the app — a full
 universe scan at up to ~300 sessions — and §J:329 calls for rate-limiting
-it. There is no rate limiter in this app, so the auth gate is what
-actually bounds abuse; the structural limits below bound legibility and
-payload size, not cost. Cost is O(distinct metrics x universe), dominated
-by the deepest metric's required_bars.
+it, which the "screener_run" limiter (app/core/rate_limit.py, ~3/hour per
+user) now does directly, on top of the auth gate. The structural limits
+below bound legibility and payload size, not cost. Cost is O(distinct
+metrics x universe), dominated by the deepest metric's required_bars.
 """
 
 import datetime as dt
@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import rate_limited
 from app.core.security import get_current_user
 from app.db.models import AppUser
 from app.db.session import get_db
@@ -133,7 +134,7 @@ def get_metrics() -> dict:
     }
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[rate_limited("screener_run")])
 def run(
     payload: ScreenerRequest,
     current_user: AppUser = Depends(get_current_user),

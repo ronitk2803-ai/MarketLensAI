@@ -57,11 +57,16 @@ services:
     environment:
       ENV: production
       DATABASE_URL: postgresql+psycopg://mlai:${POSTGRES_PASSWORD:-mlai}@postgres:5432/mlai
-      CORS_ORIGINS: http://localhost:3100
+      CORS_ORIGINS: http://localhost:3000
       # This compose runs exactly one always-on backend, so the in-process
       # scheduler (Deployment.md §6 Option A) is the right choice here.
       ENABLE_SCHEDULER: "true"
       DAILY_INGESTION_HOUR_IST: "20"
+      # False here on purpose — this container is reached by direct port
+      # exposure, not through a reverse proxy, so there is nothing in front
+      # of it to have set X-Forwarded-For truthfully. Only Render/Fly (a
+      # real edge proxy in front) should ever set this true.
+      TRUST_FORWARDED_FOR: ${TRUST_FORWARDED_FOR:-false}
       # Optional — the app runs without them, falling back to the auth-free
       # NSE Bhavcopy spine. Set them in a .env beside this file to enable
       # Upstox, and see Deployment.md §5 for the daily re-auth.
@@ -89,7 +94,7 @@ services:
       # Defaults to the container's own port, NOT dev's 3000 — this file only
       # ever runs the 3100 stack, and a mismatch here fails at the user's
       # browser with a Google error page rather than in our logs.
-      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3100/api/auth/google/callback}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/auth/google/callback}
     ports:
       - "8000:8000"
     healthcheck:
@@ -113,7 +118,7 @@ services:
       # compose network, not from the host.
       API_BASE_URL: http://backend:8000/api/v1
     ports:
-      - "3100:3000"
+      - "3000:3000"
 
 volumes:
   mlai_prod_pgdata:

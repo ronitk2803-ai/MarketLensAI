@@ -13,6 +13,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import rate_limited
 from app.db.session import get_db
 from app.services.quotes import get_live_quotes
 
@@ -21,7 +22,7 @@ router = APIRouter(tags=["quotes"])
 MAX_SYMBOLS = 50
 
 
-@router.get("/quotes")
+@router.get("/quotes", dependencies=[rate_limited("quotes")])
 def live_quotes(
     symbols: str = Query(..., description="Comma-separated NSE symbols"),
     db: Session = Depends(get_db),

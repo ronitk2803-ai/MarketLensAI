@@ -5,6 +5,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import rate_limited
 from app.db.session import get_db
 from app.engines.opportunity.registry import SCREEN_LABELS, SCREENS
 from app.services.opportunities import list_industries, run_ranked_screen_with_sparklines
@@ -35,7 +36,7 @@ def list_opportunity_industries(db: Session = Depends(get_db)) -> dict:
     return _envelope(data, source="db")
 
 
-@router.get("/opportunities")
+@router.get("/opportunities", dependencies=[rate_limited("opportunities")])
 def get_opportunities(
     screen: str = Query(...),
     industry: str | None = Query(default=None),

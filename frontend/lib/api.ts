@@ -366,8 +366,11 @@ export function getScreenerMetrics() {
 }
 
 /** Sign-in required: a full universe scan is the most expensive thing this
- * app does, and there's no rate limiter, so the auth gate is what bounds
- * it. POSTs are never cached by Next, hence no `revalidate`. */
+ * app does. The auth gate is the first bound; the backend also carries its
+ * own tighter per-user rate limit on top (~3/hour — app/core/rate_limit.py,
+ * limiter "screener_run"), since sign-in alone doesn't cap how often one
+ * account can re-run it. POSTs are never cached by Next, hence no
+ * `revalidate`. */
 export async function runScreener(
   accessToken: string,
   tree: ScreenerGroup,
@@ -558,9 +561,12 @@ export function getAiSummary(symbol: string) {
  * only when the cached summary is actually out of date (see backend
  * app/services/company_summary.py). */
 /** Takes an access token because the backend gates this one behind
- * sign-in — it is the only endpoint that can spend an LLM call, and the
- * app has no rate limiter. The GET above stays token-free: reading a
- * cached summary is public and free. */
+ * sign-in — it is the only endpoint that can spend an LLM call. Also
+ * carries its own tighter limit on top of the verified-account gate
+ * (~5/day per user — app/core/rate_limit.py, limiter "ai_summary"), since
+ * being verified doesn't itself cap how often one account can regenerate.
+ * The GET above stays token-free: reading a cached summary is public and
+ * free. */
 export function generateAiSummary(accessToken: string, symbol: string) {
   return apiFetch<AiSummary>(`/companies/${encodeURIComponent(symbol)}/ai-summary`, {
     method: "POST",

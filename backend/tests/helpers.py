@@ -63,7 +63,16 @@ def register_user(prefix: str, *, verified: bool = True) -> tuple[str, dict[str,
     cannot know it otherwise.
     """
     db = _test_session()
-    email = f"{prefix}-{uuid4().hex[:8]}@example.com"
+    # Lowercased for the SAME reason app/services/auth.py's create_user
+    # lowercases before storing: the row this ends up querying was written
+    # with that normalization applied, so looking it up with the raw,
+    # possibly-mixed-case `email` would silently miss it whenever `prefix`
+    # contains an uppercase letter. Caught live: a prefix of
+    # "ratelimit-tierD" (capital D) 100%-reproducibly raised NoResultFound
+    # below, with a perfectly successful 200 from /auth/register moments
+    # earlier — every prefix elsewhere in this suite happens to be
+    # lowercase, which is exactly why this had never fired before.
+    email = f"{prefix}-{uuid4().hex[:8]}@example.com".lower()
     response = client.post(
         "/api/v1/auth/register", json={"email": email, "password": TEST_PASSWORD}
     )

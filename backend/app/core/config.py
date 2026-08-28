@@ -80,6 +80,16 @@ class Settings(BaseSettings):
     enable_scheduler: bool = False
     daily_ingestion_hour_ist: int = 20
 
+    # Whether to trust X-Forwarded-For for rate-limit IP keying (app/core/
+    # rate_limit.py). Same shape as frontend/lib/auth-cookies.ts's
+    # COOKIE_SECURE: explicit, env-driven, safe by default. False locally
+    # and in docker-compose.prod.yml (no reverse proxy there — direct port
+    # exposure), true only on a real host (Render/Fly) where an edge proxy
+    # actually sits in front — trusting the header with nothing in front to
+    # set it truthfully would let any caller hand-pick their own rate-limit
+    # key.
+    trust_forwarded_for: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

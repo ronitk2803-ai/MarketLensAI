@@ -7,10 +7,11 @@ admin.py's POST /admin/upstox/token, which also returns a plain dict.
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import is_allowed, rate_limited
 from app.core.security import get_current_user
 from app.db.models import AppUser
 from app.db.session import get_db
@@ -112,7 +113,9 @@ def _min_password_length_check(password: str) -> None:
         raise HTTPException(status_code=400, detail="password must be at least 8 characters")
 
 
-@router.post("/register", response_model=TokenResponse)
+@router.post(
+    "/register", response_model=TokenResponse, dependencies=[rate_limited("auth_register")]
+)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
     _min_password_length_check(payload.password)
     user = create_user(db, payload.email, payload.password)
@@ -122,7 +125,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, dependencies=[rate_limited("auth_login")])
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
     user = authenticate_user(db, payload.email, payload.password)
     if user is None:
@@ -214,7 +217,7 @@ def confirm_verification_email(
 
 @router.post("/password-reset/request")
 def request_password_reset(
-    payload: PasswordResetRequest, db: Session = Depends(get_db)
+    request: Request, payload: PasswordResetRequest, db: Session = Depends(get_db)
 ) -> dict[str, str]:
     """Always 200, whatever happens.
 
@@ -223,6 +226,14 @@ def request_password_reset(
     particular that a throttle here must NOT return 429 the way
     /verify-email/send does: that endpoint is authenticated so the caller
     already knows the account exists, while this one is open to anyone.
+    That's why this checks the "password_reset_request" limiter manually
+    via is_allowed() (app/core/rate_limit.py) rather than the raising
+    Depends(rate_limited(...)) every other tier-limited route uses — this
+    is the one route where tripping the limit must look identical to not
+    tripping it, addressing the aggregate-spray gap the per-address
+    auth_codes.py throttle alone doesn't cover (that one bounds sends to
+    ONE address; this bounds how many DIFFERENT addresses one caller can
+    spray, each of which would otherwise burn a real outbound email).
 
     The residual side channel is timing — a registered address pays for an
     outbound email, an unregistered one returns immediately. Left as-is
@@ -234,7 +245,7 @@ def request_password_reset(
     user = (
         db.query(AppUser).filter_by(email=payload.email.strip().lower()).one_or_none()
     )
-    if user is not None:
+    if user is not None and is_allowed("password_reset_request", request):
         try:
             send_code(db, user, "password_reset")
         except (CodeThrottled, ProviderError):

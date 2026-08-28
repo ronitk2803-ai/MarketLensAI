@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import router as v1_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.rate_limit import RateLimitMiddleware, sweep_all
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,32 @@ def _run_daily_ingestion_job() -> None:
         session.close()
 
 
+def _sweep_rate_limiters_job() -> None:
+    try:
+        dropped = sweep_all()
+        if dropped:
+            logger.info("rate_limit sweep: dropped %d idle buckets", dropped)
+    except Exception:
+        logger.exception("rate_limit sweep: run failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Runs regardless of settings.enable_scheduler, unlike daily_ingestion
+    # below — ingestion is optional batch work, but an unbounded rate-
+    # limiter dict (one entry per distinct caller ever seen) is a memory-
+    # safety concern on a public deploy, not an opt-in feature. Its own
+    # scheduler instance so it keeps running even when ingestion is off.
+    sweep_scheduler = BackgroundScheduler(timezone=ZoneInfo("Asia/Kolkata"))
+    sweep_scheduler.add_job(
+        _sweep_rate_limiters_job,
+        trigger="interval",
+        hours=1,
+        id="rate_limit_sweep",
+        misfire_grace_time=600,
+    )
+    sweep_scheduler.start()
+
     scheduler: BackgroundScheduler | None = None
     if settings.enable_scheduler:
         scheduler = BackgroundScheduler(timezone=ZoneInfo("Asia/Kolkata"))
@@ -51,9 +76,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     if scheduler is not None:
         scheduler.shutdown(wait=False)
+    sweep_scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="mlai API", version="0.1.0", lifespan=lifespan)
+
+# Added BEFORE CORSMiddleware, deliberately — Starlette wraps middleware in
+# reverse of add_middleware call order, so whichever is added LAST ends up
+# OUTERMOST. CORS must stay outermost so it still attaches CORS headers to
+# a 429 this middleware short-circuits; added on the other side, a 429
+# never reaches CORSMiddleware and arrives at a browser as an opaque,
+# unreadable network error rather than a readable 429. See
+# app/core/rate_limit.py for the limiter itself.
+app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

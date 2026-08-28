@@ -86,8 +86,9 @@ export function AiSummaryPanel({
   initial: AiSummary | null;
   meta: Meta;
   /** Generating spends an LLM call, so the backend requires sign-in for it
-   * (the app has no rate limiter). Reading a cached summary stays public,
-   * which is why this only gates the button and not the panel. */
+   * and additionally rate-limits it per user (~5/day — app/core/
+   * rate_limit.py). Reading a cached summary stays public, which is why
+   * this only gates the button and not the panel. */
   canGenerate: boolean;
 }) {
   const [summary, setSummary] = useState(initial);
