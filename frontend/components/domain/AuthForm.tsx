@@ -16,14 +16,21 @@ import { Panel } from "@/components/terminal/Panel";
  */
 export function AuthForm({
   mode,
+  googleEnabled = false,
+  initialError,
 }: {
   mode: "login" | "register";
+  /** Resolved on the server from GET /auth/providers, so enabling Google
+   *  is a config change rather than a frontend rebuild. */
+  googleEnabled?: boolean;
+  /** Set when the Google callback bounced back here with ?error=. */
+  initialError?: string;
 }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError ?? null);
 
   const isRegister = mode === "register";
 
@@ -54,6 +61,25 @@ export function AuthForm({
   return (
     <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-4 py-12">
       <Panel title={isRegister ? "Create an account" : "Sign in"}>
+        {googleEnabled && (
+          <div className="flex flex-col gap-3 px-3 pt-4">
+            {/* A plain <a>, not <Link> and not fetch: /start replies 302 to
+                accounts.google.com, which the client router would try to
+                handle and fetch would fail on CORS. */}
+            <a
+              href="/api/auth/google/start"
+              className="flex h-8 items-center justify-center gap-2 rounded-sm border border-input text-sm hover:bg-accent"
+            >
+              Continue with Google
+            </a>
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="h-px flex-1 bg-border" />
+              or
+              <span className="h-px flex-1 bg-border" />
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="flex flex-col gap-3 px-3 py-4">
           <label className="flex flex-col gap-1">
             <span className="label-caps">Email</span>

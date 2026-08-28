@@ -5,6 +5,8 @@ which doesn't apply here; the real precedent for an action endpoint is
 admin.py's POST /admin/upstox/token, which also returns a plain dict.
 """
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
@@ -12,6 +14,11 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.models import AppUser
 from app.db.session import get_db
+from app.providers.auth.google_oauth import (
+    build_authorize_url,
+    exchange_code,
+)
+from app.providers.auth.google_oauth import is_configured as google_is_configured
 from app.providers.errors import ProviderError
 from app.services.alerts import unread_count
 from app.services.auth import (
@@ -30,6 +37,7 @@ from app.services.auth_codes import (
     mark_email_verified,
     send_code,
 )
+from app.services.google_auth import link_or_create_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -58,6 +66,10 @@ class VerifyCodeRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     email: EmailStr
+
+
+class GoogleCallbackRequest(BaseModel):
+    code: str
 
 
 class PasswordResetConfirm(BaseModel):
@@ -157,6 +169,11 @@ def me(
 # to make those statements.
 _BAD_CODE = "that code is invalid or has expired"
 
+# The frontend mints state with crypto.randomUUID(); this is deliberately a
+# little wider than that, but still narrow enough that nothing surprising
+# can reach a URL we hand to a browser.
+_STATE_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,128}")
+
 
 @router.post("/verify-email/send")
 def send_verification_email(
@@ -252,5 +269,53 @@ def confirm_password_reset(
     # minted and sign the user out of the recovery they just completed.
     revoke_all_refresh_tokens(db, user.id)
     set_password(db, user, payload.new_password)
+    access_token, refresh_token = issue_tokens(db, user)
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.get("/providers")
+def available_providers() -> dict[str, bool]:
+    """Which third-party sign-ins are configured on this deployment.
+
+    Exists so the login page can hide a Google button that would only fail.
+    A runtime answer rather than a NEXT_PUBLIC_* build-time variable: those
+    are inlined into the bundle by frontend/Dockerfile, so configuring
+    Google would otherwise require a frontend rebuild.
+    """
+    return {"google": google_is_configured()}
+
+
+@router.get("/google/authorize-url")
+def google_authorize_url(state: str) -> dict[str, str]:
+    """Where to send the browser to start the Google flow.
+
+    `state` is minted and stored in a cookie by the frontend route handler;
+    this only echoes it into the URL. Validated against a strict charset
+    anyway — it is caller-supplied and ends up in a URL we hand to a
+    browser.
+    """
+    if not _STATE_PATTERN.fullmatch(state):
+        raise HTTPException(status_code=400, detail="invalid state")
+    try:
+        return {"url": build_authorize_url(state)}
+    except ProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@router.post("/google/callback", response_model=TokenResponse)
+def google_callback(
+    payload: GoogleCallbackRequest, db: Session = Depends(get_db)
+) -> TokenResponse:
+    """Exchange the authorization code and sign the user in.
+
+    CSRF protection (the `state` round trip) lives in the frontend route
+    handler, which is where the cookie holding it can be read.
+    """
+    try:
+        identity = exchange_code(payload.code)
+    except ProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    user = link_or_create_user(db, identity)
     access_token, refresh_token = issue_tokens(db, user)
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)

@@ -719,6 +719,31 @@ export function confirmPasswordReset(email: string, code: string, newPassword: s
   });
 }
 
+/** Which third-party sign-ins this deployment has configured. Answered at
+ *  runtime so enabling Google needs no frontend rebuild — a
+ *  NEXT_PUBLIC_* variable would be inlined at build time. */
+export function getAuthProviders() {
+  return apiFetchRaw<{ google: boolean }>("/auth/providers", { cache: "no-store" });
+}
+
+/** The backend builds the URL so the redirect_uri sent here and the one
+ *  sent at exchange time come from a single value and cannot drift. */
+export function getGoogleAuthorizeUrl(state: string) {
+  return apiFetchRaw<{ url: string }>(
+    `/auth/google/authorize-url?state=${encodeURIComponent(state)}`,
+    { cache: "no-store" },
+  );
+}
+
+export function completeGoogleSignIn(code: string) {
+  return apiFetchRaw<AuthTokens>("/auth/google/callback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+    cache: "no-store",
+  });
+}
+
 /** Server Components call this directly (not through a Route Handler) —
  * same as getCompany/getPrices/etc., per this app's existing convention
  * that Route Handlers only exist to bridge Client Components that can't

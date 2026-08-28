@@ -1,5 +1,8 @@
 import { AuthForm } from "@/components/domain/AuthForm";
+import { getAuthProviders } from "@/lib/api";
 
-export default function RegisterPage() {
-  return <AuthForm mode="register" />;
+export default async function RegisterPage() {
+  const providers = await getAuthProviders().catch(() => ({ google: false }));
+
+  return <AuthForm mode="register" googleEnabled={providers.google} />;
 }

@@ -59,3 +59,25 @@ export function clearAuthCookies(cookieStore: CookieStore) {
   cookieStore.delete(ACCESS_TOKEN_COOKIE);
   cookieStore.delete(REFRESH_TOKEN_COOKIE);
 }
+
+/** CSRF guard for the Google flow: minted before the redirect, compared on
+ *  the way back. Short-lived and scoped to the callback path — it is
+ *  useless anywhere else and useless a few minutes later. */
+export const OAUTH_STATE_COOKIE = "mlai_oauth_state";
+const OAUTH_STATE_MAX_AGE_SECONDS = 600;
+
+export function setOAuthStateCookie(cookieStore: CookieStore, state: string) {
+  cookieStore.set(OAUTH_STATE_COOKIE, state, {
+    // Deliberately reuses baseOptions() rather than hand-rolling flags.
+    // sameSite "lax" is load-bearing here: Google returns via a top-level
+    // GET navigation, which lax permits and "strict" would drop, breaking
+    // the flow with no obvious cause. And a hardcoded `secure: true` is
+    // exactly what silently broke login on the container deploy (31cd617).
+    ...baseOptions(),
+    maxAge: OAUTH_STATE_MAX_AGE_SECONDS,
+  });
+}
+
+export function clearOAuthStateCookie(cookieStore: CookieStore) {
+  cookieStore.delete(OAUTH_STATE_COOKIE);
+}
