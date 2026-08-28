@@ -5,9 +5,16 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Asset
 from app.domain.models import Bar, CorporateActionEvent
+from app.providers.errors import ProviderError
+from app.providers.india.nse_actions import NSECorporateActionsProvider
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.services.historical_episodes import get_historical_falls
+
+
+def _nse_unavailable(*args: object, **kwargs: object) -> list[CorporateActionEvent]:
+    # This suite controls actions via the yfinance stub below.
+    raise ProviderError("nse_actions", "simulated outage")
 
 
 def _make_asset(db: Session, *, symbol: str = "ZZHIST1", asset_class: str = "EQUITY") -> Asset:
@@ -38,6 +45,10 @@ def _stub_providers(
     actions: list[CorporateActionEvent] | None = None,
 ) -> None:
     monkeypatch.setattr(NSEBhavcopyProvider, "get_ohlcv", lambda *a, **k: bars)
+    # NSE is tried first (app/services/corporate_actions.py); failing it
+    # here keeps this whole suite's actions controlled by the `actions`
+    # param via the yfinance fallback, unchanged from before NSE existed.
+    monkeypatch.setattr(NSECorporateActionsProvider, "get_corporate_actions", _nse_unavailable)
     monkeypatch.setattr(
         YFinanceCorporateActionsProvider, "get_corporate_actions", lambda *a, **k: actions or []
     )

@@ -15,6 +15,7 @@ from app.db.models import (
 )
 from app.domain.models import Bar, Ratios
 from app.jobs.daily_ingestion import run_daily_ingestion
+from app.providers.india.nse_actions import NSECorporateActionsProvider
 from app.providers.india.nse_bhavcopy import BhavcopyRow, NSEBhavcopyProvider
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
@@ -95,8 +96,19 @@ def _stub_providers(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(NSEBhavcopyProvider, "get_day_bars", fake_day_bars)
     monkeypatch.setattr(NSEBhavcopyProvider, "get_ohlcv", lambda *a, **k: bars)
+    # Both corporate-actions providers stubbed — NSE is tried first
+    # (app/services/corporate_actions.py's get_or_fetch_corporate_actions),
+    # and the bulk refresh step (refresh_corporate_actions_from_nse) is
+    # stubbed separately below via fetch_actions_bulk, since it's a module
+    # function, not a provider method.
+    monkeypatch.setattr(
+        NSECorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
+    )
     monkeypatch.setattr(
         YFinanceCorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
+    )
+    monkeypatch.setattr(
+        "app.services.corporate_actions.fetch_actions_bulk", lambda *a, **k: {}
     )
     monkeypatch.setattr(
         YFinanceFundamentalDataProvider,

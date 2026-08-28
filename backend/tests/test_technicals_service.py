@@ -7,6 +7,7 @@ from app.db.models import Asset
 from app.domain.models import Bar
 from app.engines.indicators import rsi as rsi_fn
 from app.engines.indicators import sma
+from app.providers.india.nse_actions import NSECorporateActionsProvider
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.services.technicals import compute_technicals
@@ -45,6 +46,9 @@ def test_compute_technicals_matches_indicators_computed_directly(
 
     monkeypatch.setattr(NSEBhavcopyProvider, "get_ohlcv", lambda *a, **k: bars)
     monkeypatch.setattr(
+        NSECorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
+    )
+    monkeypatch.setattr(
         YFinanceCorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
     )
 
@@ -65,6 +69,9 @@ def test_compute_technicals_empty_when_no_price_data(
 ) -> None:
     asset = _make_asset(db)
     monkeypatch.setattr(NSEBhavcopyProvider, "get_ohlcv", lambda *a, **k: [])
+    monkeypatch.setattr(
+        NSECorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
+    )
     monkeypatch.setattr(
         YFinanceCorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
     )

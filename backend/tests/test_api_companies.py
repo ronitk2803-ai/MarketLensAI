@@ -10,7 +10,9 @@ from app.db.models import Asset, Company, FinancialMetric, Industry
 from app.db.session import get_db
 from app.domain.models import AssetRef, Bar, Ratios
 from app.main import app
+from app.providers.errors import ProviderError
 from app.providers.india.google_news import GoogleNewsProvider
+from app.providers.india.nse_actions import NSECorporateActionsProvider
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.nse_sector_pe import IndexPeRow
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
@@ -50,6 +52,9 @@ def _stub_external_calls(monkeypatch: pytest.MonkeyPatch) -> None:
         Bar(date=today, open=100, high=102, low=99, close=101.5, volume=1200),
     ]
     monkeypatch.setattr(NSEBhavcopyProvider, "get_ohlcv", lambda *a, **k: bars)
+    monkeypatch.setattr(
+        NSECorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
+    )
     monkeypatch.setattr(
         YFinanceCorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
     )
@@ -148,6 +153,13 @@ def test_get_corporate_actions_maps_fields(
 ) -> None:
     from app.domain.models import CorporateActionEvent
 
+    def _nse_unavailable(*a: object, **k: object) -> list[CorporateActionEvent]:
+        raise ProviderError("nse_actions", "simulated outage")
+
+    # NSE is tried first (app/services/corporate_actions.py); failing it
+    # here falls through to yfinance so this test can control the exact
+    # payload the endpoint's field-mapping is checked against.
+    monkeypatch.setattr(NSECorporateActionsProvider, "get_corporate_actions", _nse_unavailable)
     monkeypatch.setattr(
         YFinanceCorporateActionsProvider,
         "get_corporate_actions",

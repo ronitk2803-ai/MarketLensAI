@@ -31,12 +31,20 @@ from sqlalchemy.orm import Session, joinedload
 from app.db.models import Asset, Company, ScoreProfile
 from app.services.alerts import AlertGenerationResult, generate_alerts
 from app.services.backfill import BackfillResult, backfill_universe_from_bhavcopy
-from app.services.corporate_actions import get_or_fetch_corporate_actions
+from app.services.corporate_actions import (
+    get_or_fetch_corporate_actions,
+    refresh_corporate_actions_from_nse,
+)
 from app.services.news import NewsRefreshResult, refresh_tracked_news
 from app.services.scoring import get_or_compute_score
 from app.services.thesis import run_thesis_eval
 
 logger = logging.getLogger(__name__)
+
+# ~13 months — wide enough to safely overlap the previous run (upsert is
+# idempotent) even after a missed day or two, cheap because this is one
+# HTTP call regardless of window size (app/providers/india/nse_actions.py).
+CORPORATE_ACTIONS_LOOKBACK_DAYS = 400
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +60,7 @@ class DailyIngestionResult:
     alerts_pruned: int = 0
     news_fetched: int = 0
     news_errors: int = 0
+    corporate_actions_nse_ingested: int = 0
 
 
 def _active_equity_universe(db: Session) -> list[Asset]:
@@ -86,6 +95,23 @@ def run_daily_ingestion(
     logger.info("daily_ingestion: price backfill %s", backfill)
 
     assets = _active_equity_universe(db)
+
+    # One NSE bulk call for the whole market, run on *every* ingestion
+    # regardless of what's already stored (app/services/corporate_actions.py's
+    # docstring on refresh_corporate_actions_from_nse) — this is what
+    # catches a genuinely new action for an asset that already had older
+    # rows, which the per-asset lazy loop below never would (it only fetches
+    # once, the first time an asset has zero stored rows). A wide-ish
+    # rolling window, not just since-yesterday: NSE sometimes back-dates a
+    # filing's caBroadcastDate a few days after the ex-date, and re-running
+    # over a stale window is free (idempotent upsert) where under-covering
+    # a real action is not.
+    ca_window_start = end - dt.timedelta(days=CORPORATE_ACTIONS_LOOKBACK_DAYS)
+    nse_result = refresh_corporate_actions_from_nse(
+        db, assets, from_date=ca_window_start, to_date=end
+    )
+    db.commit()
+    logger.info("daily_ingestion: NSE corporate actions %s", nse_result)
 
     ca_processed = 0
     ca_errors = 0
@@ -141,6 +167,7 @@ def run_daily_ingestion(
 
     result = DailyIngestionResult(
         backfill=backfill,
+        corporate_actions_nse_ingested=nse_result.total,
         corporate_actions_processed=ca_processed,
         corporate_actions_errors=ca_errors,
         scores_computed=scores_computed,

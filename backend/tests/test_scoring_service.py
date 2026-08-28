@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Asset, Company, Industry, Score, ScoreProfile
 from app.domain.models import AssetRef, Bar, Ratios
 from app.engines.scoring.registry import DEFAULT_WEIGHTS, FINANCIALS_WEIGHTS
+from app.providers.india.nse_actions import NSECorporateActionsProvider
 from app.providers.india.nse_bhavcopy import NSEBhavcopyProvider
 from app.providers.india.yfinance_actions import YFinanceCorporateActionsProvider
 from app.providers.india.yfinance_fundamentals import YFinanceFundamentalDataProvider
@@ -68,6 +69,9 @@ def _linear_bars(n: int) -> list[Bar]:
 def _stub_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     bars = _linear_bars(60)
     monkeypatch.setattr(NSEBhavcopyProvider, "get_ohlcv", lambda *a, **k: bars)
+    monkeypatch.setattr(
+        NSECorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
+    )
     monkeypatch.setattr(
         YFinanceCorporateActionsProvider, "get_corporate_actions", lambda *a, **k: []
     )
