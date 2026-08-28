@@ -109,7 +109,7 @@ export default async function AdvancedScreenerPage({
               )
             }
             bodyClassName="p-0"
-            footnote="Ranked by Opportunity Score where available — attention-worthiness, not raw decline. A condition whose metric is missing for a company excludes it rather than passing it; coverage below says how often that happened."
+            footnote="Ranked by Opportunity Score where available — attention-worthiness, not raw decline, and not a buy/sell/hold recommendation. A condition whose metric is missing for a company excludes it rather than passing it; coverage below says how often that happened. MarketLens AI is not a SEBI-registered investment adviser or research analyst."
           >
             {error ? (
               <p className="px-3 py-10 text-center text-sm text-down">{error}</p>

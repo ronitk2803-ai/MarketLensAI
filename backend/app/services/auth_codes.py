@@ -144,7 +144,17 @@ def _body(purpose: AuthCodePurpose, code: str) -> str:
     else:
         lead = "Welcome to MarketLens AI. Confirm this is your address:"
         tail = "If you didn't create this account, you can ignore this email."
-    return f"{lead}\n\n    {code}\n\nThis code expires in {minutes} minutes.\n\n{tail}\n"
+    # Every outbound email is a "place" a first-time user sees the app's
+    # name before ever reaching the site itself, so the same compliance
+    # line the footer/panels carry belongs here too, not just in the UI.
+    footer = (
+        "MarketLens AI is not a SEBI-registered investment adviser or research "
+        "analyst. Content on the platform, including AI-generated summaries, is "
+        "provided for research and analytical purposes only and is not "
+        "investment advice."
+    )
+    body = f"{lead}\n\n    {code}\n\nThis code expires in {minutes} minutes.\n\n{tail}"
+    return f"{body}\n\n{footer}\n"
 
 
 def send_code(db: Session, user: AppUser, purpose: AuthCodePurpose) -> None:

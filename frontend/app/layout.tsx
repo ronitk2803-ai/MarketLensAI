@@ -37,10 +37,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           {children}
           <footer className="mt-auto border-t border-border px-4 py-3">
             <p className="mx-auto max-w-[1600px] text-[11px] leading-relaxed text-muted-foreground">
-              Research tooling, not investment advice. Scores describe research
-              attractiveness — never a predicted return or a buy/sell recommendation. Data is
-              end-of-day and may be delayed or incomplete; every figure carries its own source
-              and timestamp.
+              MarketLens AI is not a SEBI-registered investment adviser or research analyst.
+              Nothing on this site is investment advice or a recommendation to buy, sell, or
+              hold any security — it is research tooling only. Scores describe research
+              attractiveness, never a predicted return. AI-generated summaries are produced for
+              research and analytical purposes only and should be independently verified before
+              acting. Data is end-of-day and may be delayed or incomplete; every figure carries
+              its own source and timestamp.
             </p>
           </footer>
         </TooltipProvider>

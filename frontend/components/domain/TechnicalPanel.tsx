@@ -42,6 +42,7 @@ export function TechnicalPanel({ snapshot, meta }: { snapshot: TechnicalSnapshot
       title="Technicals"
       actions={<ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />}
       bodyClassName="p-3"
+      footnote="Indicators only — not a trading signal, forecast, or buy/sell/hold recommendation. MarketLens AI is not a SEBI-registered investment adviser or research analyst."
       fullscreenable
     >
       <div className="grid grid-cols-2 gap-y-3 sm:grid-cols-4">

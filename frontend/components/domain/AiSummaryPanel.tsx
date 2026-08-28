@@ -145,7 +145,7 @@ export function AiSummaryPanel({
           </div>
         )
       }
-      footnote="AI-generated interpretation, not verified data or investment advice."
+      footnote="AI-generated interpretation, produced for research and analytical purposes only — not verified data, not investment advice, and not a recommendation to buy, sell, or hold. MarketLens AI is not a SEBI-registered investment adviser or research analyst; verify independently before acting."
     >
       {!summary ? (
         <div className="flex flex-col items-center gap-3 px-3 py-8 text-center">

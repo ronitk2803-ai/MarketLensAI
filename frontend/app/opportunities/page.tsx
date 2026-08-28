@@ -131,7 +131,7 @@ export default async function OpportunitiesPage({
           </div>
         }
         bodyClassName="p-0"
-        footnote="Ranked by Opportunity Score where available — attention-worthiness, not raw decline. Rows without a score yet sort after every scored row."
+        footnote="Ranked by Opportunity Score where available — attention-worthiness, not raw decline, and not a buy/sell/hold recommendation. Rows without a score yet sort after every scored row. MarketLens AI is not a SEBI-registered investment adviser or research analyst."
       >
         {hits.length === 0 ? (
           <p className="px-3 py-10 text-center text-sm text-muted-foreground">

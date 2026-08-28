@@ -122,7 +122,7 @@ export function FundamentalsPanel({
       title="Fundamentals"
       actions={<ProvenanceBadge source={meta.source} asOf={meta.as_of} confidence={meta.confidence} />}
       bodyClassName="p-0"
-      footnote="Best-effort, single-source data — always shown at low confidence. Missing fields are omitted, never estimated."
+      footnote="Best-effort, single-source data — always shown at low confidence. Missing fields are omitted, never estimated. Provided for research purposes only, not investment advice."
       fullscreenable
     >
       {!hasData ? (

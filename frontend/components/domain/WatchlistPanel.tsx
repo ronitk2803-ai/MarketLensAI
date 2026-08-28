@@ -201,7 +201,7 @@ export function WatchlistPanel({ user }: { user: AuthUser | null }) {
         </div>
       }
       bodyClassName="p-0"
-      footnote={`${quoteSourceNote} Δ windows and ranges are end-of-day and corporate-action adjusted; 'all-time' means since this deployment started tracking each stock, not its full listed history.`}
+      footnote={`${quoteSourceNote} Δ windows and ranges are end-of-day and corporate-action adjusted; 'all-time' means since this deployment started tracking each stock, not its full listed history. Tracking tool only — not investment advice or a recommendation.`}
       fullscreenable
     >
       {importing ? (
