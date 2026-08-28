@@ -447,7 +447,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 15. ⚠️ Deploy: Vercel (fe) + Render/Fly (be) + Supabase/Neon (db) + scheduled ingestion. **Runbook written (`Deployment.md`) and the full container stack proven locally; not yet executed against a public host.** No public URL exists. Checklist in `SUMMARISER.md` §8.1.
 
 **P1 — complete**
-16. ✅ Auth (JWT + refresh tokens, httpOnly cookies).
+16. ✅ Auth (JWT + refresh tokens, httpOnly cookies). **Extended beyond the original scope 2026-08-27:** email verification by 6-digit code, password reset by code, and Google sign-in — plus a verified-email gate on every endpoint that saves user data. See §X.7.
 17. ✅ Portfolio + Zerodha CSV import — **extended beyond spec to multi-broker consolidation** (Zerodha + Upstox in one view, uniqueness `(user, asset, broker)`).
 18. ✅ Watchlist.
 19. ⚠️ AI single-company analysis (grounded + cited) — code complete and hardened; **blocked at runtime by a restricted Gemini key** (§U.12).
@@ -510,7 +510,9 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 
 12. **AI provider key restricted — NEW, blocks steps 19 (runtime) and 25.** The Gemini key lists models fine (200 in ~0.6 s) but `generateContent` hangs or returns an empty-bodied 404, identically from host and container, with Google's own server headers. A Cloud-console API-key restriction, not a code/network/model problem. → Failure path hardened (bounded 45 s budget, `provider_fetch_log` recording, 10-minute negative cache, auth gate, real error text surfaced). Console fix documented in `SUMMARISER.md` §8.2.
 
-13. **No rate limiter exists — NEW.** The auth gate is currently the only bound on abuse for `POST /screener/run` and `POST /ai-summary`. Must be closed before a public deploy.
+13. **No general rate limiter — NEW.** The auth gate is still the only bound on `POST /screener/run`. Partially mitigated since: `POST /ai-summary` now requires a *verified* account, and the code endpoints carry per-user throttles (60s spacing, 10/hour, 5 guesses per code, each committed before the error is raised so `get_db`'s rollback can't erase them). None of that is a general-purpose limiter. Must be closed before a public deploy.
+
+14. **Resend testing mode — NEW, and it fails in the direction that hides it.** Until a domain is verified at resend.com/domains, the default `onboarding@resend.dev` sender delivers only to the Resend account owner's own address and 403s for everyone else — so verification and password reset work perfectly for whoever is testing and fail for every real user. → The provider translates that 403 into a message naming the fix; `SUMMARISER.md` §8.2 states it as a prerequisite for public signup.
 
 ---
 
@@ -595,6 +597,17 @@ database, but has never been hosted.*
 - **UI:** `HistoricalEventsPanel` between Technicals and the AI summary. Current-fall stat strip, comparables table, a data-quality strip, and a footnote carrying three non-negotiable clauses: "not a forecast"; "history begins X, not its listing date"; "magnitude, duration and volatility only — not the reasons".
 - **Edge cases:** left-censored falls (peak = first bar) are flagged, excluded from comparables, and counted; non-positive closes skipped; ETFs return empty (our actions source doesn't track unit consolidations); an ongoing fall reports `decline_pct` (peak→trough) *and* `current_drawdown_pct` (peak→latest) separately, with `trough_to_recovery_*` as `None` rather than "days so far"; `trough_is_latest_bar` flags a stock still making new lows. `worst_session_pct` is the tell for an unadjusted corporate action and is surfaced, not suppressed — which is how §U.11 was discovered.
 - **Acceptance:** ADANIENT reports −71.3% over 69 days from its 2022-12-20 peak, unrecovered; TCS shows its 2022 −25.8% fall recovering after 501 days alongside the current one; a stock near its high shows `current: null` with past falls still listed. All verified live.
+
+### X.7 Email Verification, Password Reset, Google Sign-In *(P1 auth extension, 2026-08-27)*
+- **Purpose:** prove an address is real, provide a way back into a forgotten account, and offer a sign-in that needs no new password.
+- **User problem:** a typo at signup produced an unrecoverable account we could never reach; a forgotten password had no recovery but a DB edit.
+- **Business logic:** one `auth_code` table serves both code flows, distinguished by a `purpose` string. Codes are 6 digits, live 10 minutes, allow 5 guesses, and are spaced 60s apart with 10/hour. `code_hash` is HMAC-SHA256 **keyed on the app secret** — not the bare SHA-256 `RefreshToken` uses, because 20 bits of entropy behind a plain digest is reversed from a stolen DB instantly, and not Argon2, which would only slow that search while putting a 64 MiB allocation on an unauthenticated endpoint.
+- **Two orderings that are load-bearing:** the wrong-guess counter is `commit()`ed *before* the 400 is raised, or `get_db`'s rollback erases it and the attempt limit does not exist; and a code whose email fails to send is marked *consumed* rather than rolled back, because the row is simultaneously the credential and the throttle record.
+- **Gate:** `get_current_verified_user` returns **403** (session valid, account not yet permitted) on the 10 endpoints that save user data. Tokens carry only `sub`/`exp`, so verification is read from the row per request — an old token cannot bypass it, and verifying needs no re-login. Verified live.
+- **Anti-enumeration:** `/password-reset/request` is always 200 (never 429 — that status would itself say the address is registered), and every confirm failure returns one byte-identical 400. The residual timing channel is documented rather than padded, because `POST /register` still answers 409 for a taken address and leaks the same fact outright.
+- **Google linking** branches on the **existing** account's verification state. An unverified local account being linked has its password nulled, its sessions revoked and its codes consumed — federated account pre-hijacking (USENIX 2022): registration proves nothing, so an attacker can register a victim's address, hold a 30-day token, and inherit the account when the real owner signs in with Google.
+- **Edge cases:** `email_verified` is checked with `is True` (the legacy userinfo endpoint named the field differently, and a missing key yields `None`); `?error=access_denied` from a cancelled consent screen is an ordinary outcome; a missing OAuth state cookie is a hard failure, not a skipped check.
+- **Acceptance:** verified live on the container stack — new account unverified, gated write 403 with the copy shown in the UI, banner appears and clears, and **the same access token minted before verification works for a gated write afterwards**.
 
 ---
 

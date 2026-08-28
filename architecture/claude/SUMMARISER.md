@@ -4,7 +4,9 @@
 > pending, and how to get it running on your machine. Codename `mlai`; the
 > product name in the UI is **MarketLens AI**. Nothing is hard-coded to a brand.
 >
-> **Status as of 2026-08-26:** P0 and P1 complete. P2 is 4 of 7 steps done.
+> **Status as of 2026-08-27:** P0 and P1 complete. P2 is 4 of 7 steps done.
+> Auth has since been extended beyond the original P1 scope with email
+> verification, password reset and Google sign-in (§8.2 for the keys needed).
 > The app runs end-to-end in containers on a developer machine against a live
 > 500-company database with 5 years of prices. **It is not deployed to a
 > public server yet** — see §8.
@@ -44,7 +46,7 @@ FastAPI (backend)  —  api → services → engines | providers → db
                           │              └─ pure, no network, unit-tested
                           └─ orchestration: cache → provider → engine → persist
    ▼
-PostgreSQL 16 (23 tables)
+PostgreSQL 16 (24 tables)
 ```
 
 **Enforced dependency rule:** `api → services → engines | providers → db`.
@@ -83,7 +85,7 @@ The API never imports providers or DB models directly; engines never do IO.
 | 14 | Attention ranking (Layer 2) | ✅ |
 | 15 | Deploy | ⚠️ **Runbook written and locally proven; not executed on a public host.** See §8 |
 | **P1** | | |
-| 16 | Auth (JWT) | ✅ |
+| 16 | Auth (JWT) | ✅ **extended**: email verification, password reset, Google sign-in |
 | 17 | Portfolio + Zerodha CSV import | ✅ **extended to multi-broker** (Zerodha + Upstox, consolidated) |
 | 18 | Watchlist | ✅ |
 | 19 | AI single-company analysis | ✅ code complete; ⚠️ **blocked at runtime by a restricted API key** — §8.2 |
@@ -109,6 +111,8 @@ The API never imports providers or DB models directly; engines never do IO.
 
 **Authenticated (bare JSON):**
 `POST /auth/register|login|refresh|logout` · `GET /auth/me` ·
+`POST /auth/verify-email/send|confirm` · `POST /auth/password-reset/request|confirm` ·
+`GET /auth/providers` · `GET /auth/google/authorize-url` · `POST /auth/google/callback` ·
 `GET|POST|DELETE /watchlist` · `GET|POST|PUT|DELETE /theses` ·
 `GET|POST|PUT|DELETE /portfolio` + `POST /portfolio/import` ·
 `GET /alerts` + `POST /alerts/read` · `POST /screener/run` ·
@@ -138,26 +142,28 @@ The API never imports providers or DB models directly; engines never do IO.
 delivery %) · `nse_indices` (Nifty 500 constituents) · `nse_sector_pe`
 (official sector P/E) · `yfinance_quotes` (live-ish quotes) ·
 `yfinance_fundamentals` · `yfinance_actions` (corporate actions) ·
-`google_news` (RSS) · `gemini_summary` (LLM) · `upstox_token_manager`.
+`google_news` (RSS) · `gemini_summary` (LLM) · `upstox_token_manager` ·
+`resend` (transactional email) · `google_oauth` (user sign-in).
 
 Every call is (or should be) recorded to `provider_fetch_log` for health
 monitoring — this is what makes a dead provider visible.
 
-### 4.5 Database — 23 tables
+### 4.5 Database — 24 tables
 
 `asset` · `instrument_map` · `industry` · `company` · `price_ohlcv` ·
 `provider_fetch_log` · `financial_statement` · `financial_metric` ·
 `sector_index_pe` · `corporate_action` · `news_article` · `company_ai_summary` ·
 `score_profile` · `score` · `score_component` · `app_user` · `refresh_token` ·
 `watchlist_item` · `thesis` · `thesis_trigger` · `thesis_event` · `holding` ·
-`alert`
+`alert` · `auth_code`
 
-14 Alembic migrations. Schema in CI comes from migrations (not `create_all`),
+16 Alembic migrations. Schema in CI comes from migrations (not `create_all`),
 so model/migration drift fails in CI rather than on deploy.
 
 ### 4.6 Frontend
 
 **Pages:** `/` (market overview) · `/company/[symbol]` · `/opportunities` ·
+`/verify-email` · `/forgot-password` ·
 `/opportunities/advanced` · `/portfolio` · `/theses` `/theses/new` `/theses/[id]` ·
 `/alerts` · `/login` · `/register` · `/upstox-callback`
 
@@ -342,6 +348,34 @@ The failure path itself was hardened in `eb449e8`, so a broken key now fails in
 ≤45 s (was ~94 s), is negative-cached for 10 minutes, is recorded to
 `provider_fetch_log`, and surfaces the provider's real message in the UI.
 
+**Resend — NOT YET OBTAINED. Verification and password reset cannot send
+email until it is.** The code is complete and tested; without `RESEND_API_KEY`
+both flows fail with an honest `502 [resend] RESEND_API_KEY not configured`
+rather than silently doing nothing.
+
+> **Get one** at resend.com/api-keys and set `RESEND_API_KEY` in `backend/.env`
+> (bare-metal) and the repo-root `.env` (container).
+>
+> **The constraint that will bite you:** until a domain is verified at
+> resend.com/domains, the default `onboarding@resend.dev` sender delivers
+> **only to the address that owns the Resend account** and returns 403 for
+> everyone else. So it works perfectly while you test with your own address
+> and fails for every real user. Verify a domain and point
+> `RESEND_FROM_EMAIL` at an address on it before anyone else can sign up.
+> The provider translates that 403 into a message naming the fix.
+
+**Google OAuth — NOT YET CONFIGURED.** Code complete; `GET /auth/providers`
+returns `{"google": false}` and the sign-in button is hidden until it is set.
+
+> **Set up** an OAuth client at console.cloud.google.com → APIs & Services →
+> Credentials → OAuth client ID → Web application. Register **both**
+> `http://localhost:3000/api/auth/google/callback` (bare-metal dev) and
+> `http://localhost:3100/api/auth/google/callback` (prod container) as
+> authorized redirect URIs — Google treats them as distinct, and permits
+> plain `http` only for `localhost`/`127.0.0.1`. Then set
+> `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI`
+> (the value must match the environment it runs in, byte for byte).
+
 **Upstox — works, but two manual steps are permanent by design:**
 - The access token expires daily ~03:30 IST and Upstox issues no refresh token.
 - **A backend restart or redeploy also clears it** — it is in-memory, never
@@ -349,16 +383,18 @@ The failure path itself was hardened in `eb449e8`, so a broken key now fails in
 - Re-auth is a 3-step manual flow (§5 of `Deployment.md`). NSE Bhavcopy is
   auth-free and covers the EOD price spine meanwhile, so nothing breaks — only
   Upstox-only data goes stale.
-- Automating this would mean a DB-backed token store; deliberately out of scope.
 
 **No other paid keys.** yfinance, NSE Bhavcopy, NSE indices, and Google News
 RSS are all free and unauthenticated.
 
 ### 8.3 Security / ops gaps
 
-- [ ] **No rate limiter anywhere.** The auth gate is currently the only bound on
-      abuse — `POST /screener/run` and `POST /ai-summary` both rely on it. The
-      spec asks for one three times.
+- [ ] **No general rate limiter.** The auth gate is still the only bound on
+      `POST /screener/run`. `POST /ai-summary` now additionally requires a
+      *verified* account, and the verification/reset code endpoints carry their
+      own per-user throttles (60 s spacing, 10/hour, 5 guesses per code) — but
+      none of that is a general-purpose limiter, which the spec asks for three
+      times.
 - [ ] `/admin/*` is a shared-secret header, not real RBAC.
 - [ ] No error tracking (Sentry or equivalent) and no uptime monitoring.
 - [ ] No backup/restore policy for the hosted database.
