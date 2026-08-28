@@ -122,7 +122,7 @@ def test_run_daily_ingestion_end_to_end(db: Session) -> None:
     # assert on this asset's own outcome rather than on global counts.
     asset = _make_asset(db)
 
-    result = run_daily_ingestion(db, price_lookback_days=10, with_alerts=False)
+    result = run_daily_ingestion(db, price_lookback_days=10, with_alerts=False, with_news=False)
 
     assert result.corporate_actions_errors == 0
     assert result.scores_errors == 0
@@ -147,7 +147,7 @@ def test_run_daily_ingestion_skips_non_equity_and_inactive_assets(db: Session) -
     db.add_all([etf, inactive])
     db.flush()
 
-    run_daily_ingestion(db, price_lookback_days=10, with_alerts=False)
+    run_daily_ingestion(db, price_lookback_days=10, with_alerts=False, with_news=False)
 
     assert db.query(Score).filter_by(asset_id=etf.id).count() == 0
     assert db.query(Score).filter_by(asset_id=inactive.id).count() == 0
@@ -166,7 +166,7 @@ def test_run_daily_ingestion_continues_past_a_single_asset_failure(
 
     monkeypatch.setattr(YFinanceFundamentalDataProvider, "get_ratios", fail)
 
-    result = run_daily_ingestion(db, price_lookback_days=10, with_alerts=False)
+    result = run_daily_ingestion(db, price_lookback_days=10, with_alerts=False, with_news=False)
 
     # A fundamentals outage propagates as a genuine per-asset scoring failure
     # (not swallowed into a degraded-but-computed score), and the batch still

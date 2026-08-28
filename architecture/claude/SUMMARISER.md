@@ -438,8 +438,12 @@ and remains true. An XBRL parser is the real fix.
 
 ### 9.3 News is one month deep and unclassified
 
-354 articles, 2026-07-25 → 2026-08-26, across 20 assets, and **every
-`event_type` is NULL**. Consequences: the historical engine can compare only
+~1 month of history and **every `event_type` is NULL**. Coverage was 24 of
+500 assets until the nightly refresh landed (2026-08-28) — news is now
+pre-fetched for followed assets plus whatever the `down_*`/`unusual_volume`
+screens surface, ~96 assets a night against a 150 cap. The rest stay
+lazy-fetched on page view, which is deliberate: all 500 nightly would be
+hundreds of Google News calls for stocks nobody opens. Consequences: the historical engine can compare only
 3 of Screener.md §10's 7 dimensions (magnitude, duration, volatility — the
 other four are *declared* as unavailable in the API payload rather than
 silently dropped), and the "why did it fall?" narrative has no event taxonomy

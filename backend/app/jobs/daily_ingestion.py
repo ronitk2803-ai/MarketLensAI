@@ -10,11 +10,12 @@ Deliberately excludes:
 - Universe refresh (re-seeding from Upstox's instrument dump): monthly per
   Build_plan.md §2, not daily — run app.services.universe on its own
   cadence, not from here.
-- News refresh for the whole universe: the per-company lazy-fetch + 1-hour
-  cooldown (app/services/news.py) already keeps anything actually being
-  viewed fresh; blindly fetching news for the whole universe daily would be
-  hundreds of Google News calls for stocks nobody is looking at, which
-  contradicts product_principles.md's "minimize API calls."
+- News refresh for the WHOLE universe: that would be hundreds of Google
+  News calls a night for stocks nobody is looking at, which contradicts
+  product_principles.md's "minimize API calls". A narrowed version does now
+  run (see refresh_tracked_news) covering only assets a user follows or the
+  screens are currently flagging — everything else stays lazy-fetched on
+  page view.
 
 One asset's failure (a Yahoo hiccup, a delisted ticker) is logged and
 skipped rather than aborting the whole batch — 259 other assets shouldn't
@@ -31,6 +32,7 @@ from app.db.models import Asset, Company, ScoreProfile
 from app.services.alerts import AlertGenerationResult, generate_alerts
 from app.services.backfill import BackfillResult, backfill_universe_from_bhavcopy
 from app.services.corporate_actions import get_or_fetch_corporate_actions
+from app.services.news import NewsRefreshResult, refresh_tracked_news
 from app.services.scoring import get_or_compute_score
 from app.services.thesis import run_thesis_eval
 
@@ -48,6 +50,8 @@ class DailyIngestionResult:
     thesis_eval_errors: int
     alerts_created: int = 0
     alerts_pruned: int = 0
+    news_fetched: int = 0
+    news_errors: int = 0
 
 
 def _active_equity_universe(db: Session) -> list[Asset]:
@@ -64,12 +68,17 @@ def _active_equity_universe(db: Session) -> list[Asset]:
 
 
 def run_daily_ingestion(
-    db: Session, *, price_lookback_days: int = 10, with_alerts: bool = True
+    db: Session,
+    *,
+    price_lookback_days: int = 10,
+    with_alerts: bool = True,
+    with_news: bool = True,
 ) -> DailyIngestionResult:
     """`with_alerts=False` is for tests: this job commits for real, and
     generating alerts off the synthetic bars the test fixtures stub in
     would inject fabricated signals into whatever accounts exist on the
-    dev database."""
+    dev database. `with_news=False` likewise keeps tests off the network —
+    the news refresh calls Google News for real."""
     end = dt.date.today()
     start = end - dt.timedelta(days=price_lookback_days)
     backfill = backfill_universe_from_bhavcopy(db, start, end)
@@ -103,6 +112,15 @@ def run_daily_ingestion(
             logger.exception("daily_ingestion: scoring failed for %s", asset.symbol)
     db.commit()
 
+    # Before thesis eval and alerts, both of which are cheap and neither of
+    # which reads news — but after scoring, so the screens refresh_tracked_news
+    # runs are evaluating today's bars rather than yesterday's.
+    news = NewsRefreshResult(0, 0, 0, 0, 0)
+    if with_news:
+        news = refresh_tracked_news(db)
+        db.commit()
+        logger.info("daily_ingestion: news refresh %s", news)
+
     # Runs last and deliberately not per-asset from `assets` above — a
     # thesis can reference a delisted/inactive asset (Build_plan.md
     # §X.1's edge cases), which `_active_equity_universe` filters out, so
@@ -131,6 +149,8 @@ def run_daily_ingestion(
         thesis_eval_errors=thesis_eval.errors,
         alerts_created=alerts.thesis_alerts + alerts.watchlist_alerts,
         alerts_pruned=alerts.pruned,
+        news_fetched=news.fetched,
+        news_errors=news.errors,
     )
     logger.info("daily_ingestion: done %s", result)
     return result

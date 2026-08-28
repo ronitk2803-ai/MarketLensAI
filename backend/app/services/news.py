@@ -5,15 +5,27 @@ loads don't repeatedly hit Google News for no new data.
 """
 
 import datetime as dt
+import logging
 import time
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, NewsArticle, ProviderFetchLog
+from app.db.models import (
+    Asset,
+    Holding,
+    NewsArticle,
+    ProviderFetchLog,
+    Thesis,
+    WatchlistItem,
+)
 from app.domain.models import AssetRef
 from app.providers.errors import ProviderError
 from app.providers.fetch_log import record_fetch
 from app.providers.india.google_news import GoogleNewsProvider
+from app.services.opportunities import run_screen
+
+logger = logging.getLogger(__name__)
 
 NEWS_REFRESH_ENDPOINT = "news_refresh"
 NEWS_LOOKBACK = dt.timedelta(days=30)
@@ -93,4 +105,113 @@ def get_or_fetch_news(db: Session, asset: Asset, *, limit: int = 20) -> list[New
         .order_by(NewsArticle.published_at.desc())
         .limit(limit)
         .all()
+    )
+
+
+# --- Nightly refresh for stocks someone actually cares about -----------------
+
+# The screens worth pre-fetching news for. Deliberately only the "something
+# just happened" ones: a stock sitting below its 200-DMA has been there for
+# months and needs no fresh headline, whereas one that just dropped 10% is
+# exactly the case this product exists to explain ("why did it fall?").
+TRACKING_SCREENS = ("down_5d", "down_30d", "unusual_volume")
+
+# Hard ceiling on one run. On a market-wide selloff the down_* screens can
+# surface hundreds of names at once, and the whole reason the nightly job
+# skipped news was to avoid exactly that volume of Google News calls
+# (§U.4 flags NSE/scrape hostility; the same caution applies here).
+# Followed assets are filled first, so the cap only ever truncates the
+# speculative half.
+MAX_NIGHTLY_FETCHES = 150
+
+# Small gap between calls. The 1-hour cooldown already stops repeat runs
+# from re-fetching, but within a single run this is what keeps 150 requests
+# from going out as a burst.
+INTER_FETCH_DELAY_SECONDS = 0.3
+
+
+@dataclass(frozen=True, slots=True)
+class NewsRefreshResult:
+    followed: int
+    surfaced: int
+    fetched: int
+    skipped_recent: int
+    errors: int
+
+
+def followed_asset_ids(db: Session) -> set[int]:
+    """Assets some user has explicitly attached themselves to.
+
+    Watchlisted, held, or carrying a thesis — the three ways this app lets
+    someone say "I care about this one". Always refreshed regardless of the
+    cap, because these are few and they are the whole point.
+    """
+    ids: set[int] = set()
+    ids.update(row[0] for row in db.query(WatchlistItem.asset_id).distinct())
+    ids.update(row[0] for row in db.query(Holding.asset_id).distinct())
+    ids.update(row[0] for row in db.query(Thesis.asset_id).distinct())
+    return ids
+
+
+def surfaced_asset_ids(db: Session) -> set[int]:
+    """Assets the opportunity screens are currently flagging.
+
+    These are the ones a user is most likely to open next and ask "why?",
+    so having the headline already stored is the difference between the AI
+    summary explaining the move and saying "(no recent news)".
+    """
+    symbols: set[str] = set()
+    for screen_id in TRACKING_SCREENS:
+        try:
+            symbols.update(hit.asset.symbol for hit in run_screen(db, screen_id))
+        except Exception:
+            logger.exception("news refresh: screen %s failed", screen_id)
+    if not symbols:
+        return set()
+    return {
+        row[0]
+        for row in db.query(Asset.id).filter(
+            Asset.symbol.in_(symbols), Asset.market == "IN", Asset.active.is_(True)
+        )
+    }
+
+
+def refresh_tracked_news(db: Session) -> NewsRefreshResult:
+    """Pre-fetch news for followed and screener-surfaced assets.
+
+    Not the whole universe: that would be ~500 Google News calls a night for
+    stocks nobody opens, which is what the original decision to keep news
+    lazy was protecting against. This narrows it to the assets where a
+    missing headline actually degrades something a user will look at.
+    """
+    followed = followed_asset_ids(db)
+    surfaced = surfaced_asset_ids(db) - followed
+
+    # Followed first, so the cap only ever truncates the speculative half.
+    ordered = list(followed) + sorted(surfaced)
+    targets = ordered[:MAX_NIGHTLY_FETCHES]
+
+    assets = db.query(Asset).filter(Asset.id.in_(targets)).all() if targets else []
+
+    fetched = 0
+    skipped = 0
+    errors = 0
+    for asset in assets:
+        if _recently_attempted(db, asset.id):
+            skipped += 1
+            continue
+        try:
+            get_or_fetch_news(db, asset)
+            fetched += 1
+        except Exception:
+            errors += 1
+            logger.exception("news refresh: failed for %s", asset.symbol)
+        time.sleep(INTER_FETCH_DELAY_SECONDS)
+
+    return NewsRefreshResult(
+        followed=len(followed),
+        surfaced=len(surfaced),
+        fetched=fetched,
+        skipped_recent=skipped,
+        errors=errors,
     )

@@ -50,8 +50,13 @@ AI_SUMMARY_ENDPOINT = "ai_summary_generate"
 # enough that a transient outage clears without anyone waiting it out.
 GENERATION_RETRY_COOLDOWN = dt.timedelta(minutes=10)
 
-_NEWS_FOR_HASH = 10
-_NEWS_FOR_PROMPT = 8
+# These two MUST stay equal. The hash decides whether a cached summary is
+# still valid; the prompt decides what the model saw. If the prompt read
+# more items than the hash covered, a change in the extra ones would alter
+# the summary the model would write without invalidating the cached one,
+# and the page would show a summary that no longer matches its own inputs.
+_NEWS_FOR_PROMPT = 12
+_NEWS_FOR_HASH = _NEWS_FOR_PROMPT
 
 
 def _source_hash(
@@ -103,7 +108,15 @@ def _build_prompt(
     latest_close: float | None,
 ) -> str:
     ratio_lines = "\n".join(f"- {r.metric}: {r.value}" for r in ratios)
-    news_lines = "\n".join(f"- {a.title}" for a in news[:_NEWS_FOR_PROMPT])
+    # Dated and attributed, not bare titles. get_or_fetch_news looks back 30
+    # days, so an undated list mixes this morning's headline with one from
+    # four weeks ago and the model has no way to tell them apart — it will
+    # describe month-old news as if it just happened. The date is the whole
+    # difference between "recent headlines" meaning something and not.
+    news_lines = "\n".join(
+        f"- {a.published_at.date()} ({a.source}): {a.title}"
+        for a in news[:_NEWS_FOR_PROMPT]
+    )
     technical_lines = "\n".join(
         line
         for line in [
@@ -136,10 +149,15 @@ def _build_prompt(
         "If a section below is empty, say coverage is limited there rather "
         "than inventing detail — an empty section is not itself a risk "
         "factor or a supporting factor, it's just missing data.\n\n"
+        "Headlines carry their publication date. Weight the recent ones "
+        "more heavily, and when you refer to something from more than a "
+        "week ago, say when it happened rather than implying it is "
+        "current news.\n\n"
         f"Latest close: {latest_close if latest_close is not None else 'unavailable'}\n\n"
         f"Key ratios:\n{ratio_lines or '(none available)'}\n\n"
         f"Technicals:\n{technical_lines or '(none available)'}\n\n"
-        f"Recent headlines:\n{news_lines or '(no recent news)'}"
+        f"Recent headlines, newest first (dates are when each was published; "
+        f"today is {dt.date.today()}):\n{news_lines or '(no recent news)'}"
     )
 
 
