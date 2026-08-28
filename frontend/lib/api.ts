@@ -678,6 +678,26 @@ export function logoutUser(refreshToken: string) {
   });
 }
 
+export function sendVerificationCode(accessToken: string) {
+  return apiFetchRaw<{ status: string }>("/auth/verify-email/send", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}
+
+export function confirmVerificationCode(accessToken: string, code: string) {
+  return apiFetchRaw<{ status: string }>("/auth/verify-email/confirm", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ code }),
+    cache: "no-store",
+  });
+}
+
 /** Server Components call this directly (not through a Route Handler) —
  * same as getCompany/getPrices/etc., per this app's existing convention
  * that Route Handlers only exist to bridge Client Components that can't

@@ -662,3 +662,61 @@ class Alert(Base):
     read_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     asset: Mapped["Asset"] = relationship()
+
+
+class AuthCode(Base):
+    """A short-lived numeric code proving someone controls an email address.
+
+    One table for both purposes rather than two, because they differ in
+    nothing but the `purpose` string: same columns, same throttle, same
+    expiry, same sweep. `purpose` follows Alert.kind's precedent — a plain
+    string documented by its type alias, not a DB enum, so adding a third
+    kind later is a code change rather than a migration.
+
+    `code_hash` is HMAC-SHA256 keyed on the app's JWT secret, NOT the bare
+    SHA-256 that RefreshToken.token_hash uses, and the difference matters.
+    A refresh token is 48 bytes of `secrets.token_urlsafe` — unsearchable,
+    so a plain digest leaks nothing. A 6-digit code is about 20 bits; a
+    bare digest of one is reversed from a stolen database instantly by
+    hashing all 10^6 candidates. Keying on a secret that lives in the
+    environment rather than in Postgres closes that completely. Argon2
+    would only have made the 10^6 search slow, and would have put a 64 MiB
+    allocation on an unauthenticated endpoint.
+
+    `attempts` and the short expiry are what stop *online* guessing, and
+    they are load-bearing rather than defence in depth — see
+    app/services/auth_codes.py, where the increment is committed before the
+    error is raised precisely so a rolled-back request cannot erase it.
+    """
+
+    __tablename__ = "auth_code"
+    __table_args__ = (
+        # At most one live code per purpose per user, enforced rather than
+        # merely intended: several live codes would multiply the guess
+        # surface while sharing one attempt budget. Partial-unique mirrors
+        # Alert's ix_alert_user_unread.
+        Index(
+            "uq_auth_code_live",
+            "user_id",
+            "purpose",
+            unique=True,
+            postgresql_where=text("consumed_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("app_user.id", ondelete="CASCADE"), index=True
+    )
+    purpose: Mapped[str]  # "verify_email" | "password_reset"
+    code_hash: Mapped[str]
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    # Set both when the code is used and when it is retired unused — a
+    # superseded code, one whose attempts ran out, or one whose email
+    # failed to send. "Consumed" here means "no longer usable", not
+    # "successfully used".
+    consumed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

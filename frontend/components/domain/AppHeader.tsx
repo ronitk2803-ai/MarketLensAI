@@ -5,6 +5,7 @@ import { AccountControl } from "@/components/domain/AccountControl";
 import { SearchBox } from "@/components/domain/SearchBox";
 import { NavLink } from "@/components/domain/NavLink";
 import { ThemeToggle } from "@/components/domain/ThemeToggle";
+import { VerifyEmailBanner } from "@/components/domain/VerifyEmailBanner";
 import { getSignedInUser } from "@/lib/session";
 
 export async function AppHeader() {
@@ -12,6 +13,7 @@ export async function AppHeader() {
   const unread = user?.unread_alert_count ?? 0;
 
   return (
+    <>
     <header className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur">
       {/* Below `sm` the search drops to its own row rather than competing
           with the nav for width — hiding the nav instead would leave no way
@@ -57,5 +59,7 @@ export async function AppHeader() {
         </div>
       </div>
     </header>
+    {user && !user.email_verified && <VerifyEmailBanner email={user.email} />}
+    </>
   );
 }

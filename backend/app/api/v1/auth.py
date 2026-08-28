@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.models import AppUser
 from app.db.session import get_db
+from app.providers.errors import ProviderError
 from app.services.alerts import unread_count
 from app.services.auth import (
     authenticate_user,
@@ -19,6 +20,13 @@ from app.services.auth import (
     issue_tokens,
     revoke_refresh_token,
     rotate_refresh_token,
+)
+from app.services.auth_codes import (
+    CodeInvalid,
+    CodeThrottled,
+    consume_code,
+    mark_email_verified,
+    send_code,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -40,6 +48,10 @@ class RefreshRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class VerifyCodeRequest(BaseModel):
+    code: str
 
 
 class TokenResponse(BaseModel):
@@ -124,3 +136,48 @@ def me(
         email_verified=current_user.email_verified_at is not None,
         has_password=current_user.hashed_password is not None,
     )
+
+
+# Every failure mode of a code check collapses to this one string. "expired"
+# and "wrong" are distinguishable answers only if you know a code was issued
+# for that address — which is itself a statement about whether the address is
+# registered, and the whole point of the identical login error above is not
+# to make those statements.
+_BAD_CODE = "that code is invalid or has expired"
+
+
+@router.post("/verify-email/send")
+def send_verification_email(
+    current_user: AppUser = Depends(get_current_user), db: Session = Depends(get_db)
+) -> dict[str, str]:
+    """Send (or resend) the address-verification code.
+
+    429 is safe to return here, unlike on the password-reset request: this
+    endpoint is authenticated, so the caller already knows the account
+    exists and the status leaks nothing.
+    """
+    if current_user.email_verified_at is not None:
+        return {"status": "already_verified"}
+    try:
+        send_code(db, current_user, "verify_email")
+    except CodeThrottled as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
+    except ProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return {"status": "sent"}
+
+
+@router.post("/verify-email/confirm")
+def confirm_verification_email(
+    payload: VerifyCodeRequest,
+    current_user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    if current_user.email_verified_at is not None:
+        return {"status": "already_verified"}
+    try:
+        consume_code(db, current_user, "verify_email", payload.code.strip())
+    except CodeInvalid as error:
+        raise HTTPException(status_code=400, detail=_BAD_CODE) from error
+    mark_email_verified(db, current_user)
+    return {"status": "verified"}
