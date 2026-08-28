@@ -450,7 +450,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 16. ✅ Auth (JWT + refresh tokens, httpOnly cookies). **Extended beyond the original scope 2026-08-27:** email verification by 6-digit code, password reset by code, and Google sign-in — plus a verified-email gate on every endpoint that saves user data. See §X.7.
 17. ✅ Portfolio + Zerodha CSV import — **extended beyond spec to multi-broker consolidation** (Zerodha + Upstox in one view, uniqueness `(user, asset, broker)`).
 18. ✅ Watchlist.
-19. ⚠️ AI single-company analysis (grounded + cited) — code complete and hardened; **blocked at runtime by a restricted Gemini key** (§U.12).
+19. ✅ AI single-company analysis (grounded + cited) — code complete, hardened, and **live** since the Gemini auth bug (§U.12) was fixed 2026-08-29.
 20. ✅ **Thesis Tracker** (see §X.1).
 — ✅ Provenance UI polish.
 
@@ -459,7 +459,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 22. ✅ Advanced combinable screener — full AND/OR condition tree over a 28-metric registry.
 23. ✅ Full industry scoring profiles — 2 profiles seeded (`default`, `financials`); others deliberately refused on measured evidence, see `app/engines/scoring/registry.py`.
 24. ✅ Intelligent alerts (incl. thesis triggers).
-25. ❌ NL research assistant — **blocked** on the same Gemini key (§U.12). Design and tool surface already exist.
+25. ❌ NL research assistant — no longer blocked (§U.12 resolved), but still not started. Needs its own design/build pass, not attempted alongside the auth fix.
 26. ❌ Score backtesting.
 27. ❌ Upstox intraday/WebSocket — needs API access.
 — ✅ Peer-percentile normalization (§X.4), 2026-08-29.
@@ -508,7 +508,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 
 11. ~~**Corporate-action feed is incomplete.**~~ **RESOLVED 2026-08-29.** `yfinance_actions` missed bonus issues and demergers entirely (BAJFINANCE, ABFRL, VEDL, 360ONE, BAJAJFINSV, SIEMENS — see §9.1 history in `SUMMARISER.md` for the exact numbers). The believed-blocked NSE corporate-actions endpoint (`www.nseindia.com/api/corporates-corporateActions`) was re-verified live and is reachable via a plain `httpx.Client` — no cookie priming needed; whatever blocked it earlier isn't blocking it now. `app/providers/india/nse_actions.py` is now the primary source (yfinance stays as fallback), with a conservative subject-line classifier that only ever types a row "split"/"bonus" when a concrete ratio was parsed unambiguously — everything else (demergers, rights, unparseable text) is recorded under a type `adjustment.py` deliberately never adjusts, so the historical-falls panel's existing suspect-action flag now has something to flag instead of nothing. Live-verified against the dev database: 1,080 rows ingested, including 33 bonuses, 12 demergers and 22 rights issues yfinance had never recorded. One-time backfill: `python -m app.jobs.backfill_corporate_actions`; the daily job now also refreshes a rolling ~13-month window unconditionally, which additionally fixes a second latent bug (an asset with any stored action never got re-fetched, so a genuinely new future action would have gone uncaught).
 
-12. **AI provider key restricted — NEW, blocks steps 19 (runtime) and 25.** The Gemini key lists models fine (200 in ~0.6 s) but `generateContent` hangs or returns an empty-bodied 404, identically from host and container, with Google's own server headers. A Cloud-console API-key restriction, not a code/network/model problem. → Failure path hardened (bounded 45 s budget, `provider_fetch_log` recording, 10-minute negative cache, auth gate, real error text surfaced). Console fix documented in `SUMMARISER.md` §8.2.
+12. ~~**AI provider key restricted, blocks steps 19 and 25.**~~ **RESOLVED 2026-08-29 — and it wasn't a console restriction after all.** The Gemini key listed models fine (200 in ~0.6s) but `generateContent` hung or returned an empty-bodied 404, identically from host and container, with Google's own server headers — a signature two days of investigation (2026-08-26) correctly read as "looks like a console restriction" but incorrectly concluded *was* one. The actual cause: `gemini_summary.py` authenticated with a `?key=` query parameter, and Google's newer "account-bound" key type hangs on that auth method regardless of console settings. Moving the key to an `x-goog-api-key` header (same request otherwise) fixed it — verified live, both via raw `curl` and via the actual `GeminiSummaryProvider.generate()` call returning a real model response end to end. No console change was needed; the restrictions were already correct. Details in `SUMMARISER.md` §8.2.
 
 13. ~~**No general rate limiter.**~~ **RESOLVED.** `app/core/rate_limit.py` — an in-memory token bucket, two layers: a global ASGI-middleware backstop on every route plus tighter per-route ceilings on Tier A/C routes. See `SUMMARISER.md` §8.3.
 
@@ -524,7 +524,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 2. ✅ **Upstox token strategy:** **Bhavcopy spine + semi-manual Upstox re-auth.** `UpstoxTokenManager` is in-memory and never stores password/PIN/TOTP. Two standing consequences: the token dies daily ~03:30 IST, **and every backend restart or redeploy clears it**. Automating it means a DB-backed token store — deliberately out of scope.
 3. ⬜ **DB/host:** still open. Either works; see `Deployment.md` §1 for the pooled-vs-direct connection-string distinction that matters on Supabase.
 4. ⬜ **Backend host:** still open. Both Render and Fly build `backend/Dockerfile` unchanged.
-5. ✅ **AI provider + cost cap:** **Gemini free tier**, with the cap enforced structurally rather than by budget alarm — generation is click-triggered only (never a page load or a schedule), and a shared `source_hash` cache means one generation per company per "the underlying data actually changed". Cost is ₹0 by construction. *(The key itself is currently restricted — §U.12.)*
+5. ✅ **AI provider + cost cap:** **Gemini free tier**, with the cap enforced structurally rather than by budget alarm — generation is click-triggered only (never a page load or a schedule), and a shared `source_hash` cache means one generation per company per "the underlying data actually changed". Cost is ₹0 by construction. *(Live and working — §U.12's auth bug is fixed.)*
 6. ⬜ **SEBI positioning stance:** disclaimer copy is live in the UI footer and `product_principles.md` fixes the approved/banned language, but the formal research-analyst positioning has **not** been signed off. Must close before a public launch.
 7. ✅ **"~1 week" definition:** moot — fundamentals plumbing shipped inside P0 (step 10) rather than following it.
 8. ✅ **Confirm EOD-only for MVP:** yes. Live-ish quotes come from `yfinance_quotes` on the company page and market overview; everything analytical is end-of-day. Intraday/WebSocket remains step 27.

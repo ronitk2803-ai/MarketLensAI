@@ -9,27 +9,46 @@ tier regardless of how much traffic the page gets.
 
 --- Diagnosing a dead provider ---
 
-Two failure modes look identical from the app (a 502 after a long wait)
-but have completely different causes. One command separates them:
+**Auth must be the `x-goog-api-key` header, not a `?key=` query
+parameter — this was the actual root cause of a multi-day outage, not a
+console restriction.** A newer Google Cloud key type ("account-bound,"
+tied to a service account rather than a bare project-level key — visible
+in the console as "Only Agent Platform (Vertex) API and Gemini API are
+supported by account bound keys") answers `GET /v1beta/models?key=...`
+(a 200) but **hangs indefinitely on `POST .../generateContent?key=...`**
+with zero bytes returned, even with every console restriction correctly
+set to "None" / "Gemini API". The identical request with the key moved
+from the query string to an `x-goog-api-key` header returns 200 in
+~10s, verified live 2026-08-28 against a freshly-created account-bound
+key — same key, same model, same body, only the auth placement changed.
+Two days of investigation (2026-08-26) blamed an API-key restriction in
+the Google Cloud console because the *symptom* (GET works, POST hangs,
+`server: scaffolding on HTTPServer2` proving Google itself was
+answering) is identical to a genuinely referrer-restricted key — but the
+actual fix for an account-bound key is the header, not the console.
+`generate()` below uses the header now; this docstring's diagnostic
+still checks both so a real console restriction on an *older*-style key
+is still distinguishable from this.
 
     KEY=$(grep '^GEMINI_API_KEY=' backend/.env | cut -d= -f2-)
+    # Header auth — what the app actually does. If this 200s, the key works.
     curl -s -o /dev/null -w '%{http_code} %{time_total}s\\n' \\
-      "https://generativelanguage.googleapis.com/v1beta/models?key=$KEY"
+      -H "x-goog-api-key: $KEY" -H 'Content-Type: application/json' \\
+      -d '{"contents":[{"parts":[{"text":"ok"}]}]}' \\
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+    # Query-param auth — kept only to distinguish "this key needs the
+    # header" (query hangs, header above 200s) from "this key is
+    # genuinely dead" (both fail identically).
     curl -s -o /dev/null -w '%{http_code} %{time_total}s\\n' \\
       -H 'Content-Type: application/json' \\
       -d '{"contents":[{"parts":[{"text":"ok"}]}]}' \\
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$KEY"
 
-If the GET returns 200 and the POST hangs or returns an empty-bodied 404,
-the key is valid but **not authorized to generate** — an API-key
-restriction in the Google Cloud console (the response carries
-`vary: Referer`, and a referrer-restricted key behaves exactly this way).
-That is a console fix, not a code fix. Verified live 2026-08-26: the GET
-answered 200 in 0.6s while the POST sent its body in full and received
-zero bytes, from both the host and inside the container, with
-`server: scaffolding on HTTPServer2` proving Google itself was answering.
-If instead the GET fails too, it's the key or the network; if the POST
-404s *with* a JSON body naming the model, the model was retired.
+If the header form also hangs or 404s empty-bodied, *then* it's a real
+console restriction (Application restrictions / API restrictions) or a
+dead key — check those next. If the GET to `/v1beta/models` fails too,
+it's the key or the network; if a POST 404s *with* a JSON body naming
+the model, the model was retired.
 """
 
 import time
@@ -99,7 +118,14 @@ class GeminiSummaryProvider:
                 try:
                     response = client.post(
                         API_URL.format(model=self._model),
-                        params={"key": self._api_key},
+                        # Header, not `params={"key": ...}` — see the
+                        # module docstring. A `?key=` query param hangs
+                        # indefinitely for an account-bound key even with
+                        # every console restriction set correctly; the
+                        # header works identically for both key types, so
+                        # it's the right default regardless of which kind
+                        # of key is configured.
+                        headers={"x-goog-api-key": self._api_key},
                         json={"contents": [{"parts": [{"text": prompt}]}]},
                         # Clamped so a final attempt can't run past the
                         # budget. Only narrows the read leg; connect stays

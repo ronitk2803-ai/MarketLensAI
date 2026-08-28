@@ -9,9 +9,11 @@
 > both also done. Auth has been extended beyond the original P1 scope with
 > email verification, password reset and Google sign-in (§8.2 for the keys
 > needed). The corporate-actions data gap (§9.1, the highest-impact known
-> data bug) is fixed. The app runs end-to-end in containers on a developer
-> machine against a live 500-company database with 5 years of prices.
-> **It is not deployed to a public server yet** — see §8.
+> data bug) is fixed, and so is the Gemini auth bug (§8.2) — the AI company
+> summary is genuinely live now, not just code-complete. The app runs
+> end-to-end in containers on a developer machine against a live
+> 500-company database with 5 years of prices. **It is not deployed to a
+> public server yet** — see §8.
 
 ---
 
@@ -90,7 +92,7 @@ The API never imports providers or DB models directly; engines never do IO.
 | 16 | Auth (JWT) | ✅ **extended**: email verification, password reset, Google sign-in |
 | 17 | Portfolio + Zerodha CSV import | ✅ **extended to multi-broker** (Zerodha + Upstox, consolidated) |
 | 18 | Watchlist | ✅ |
-| 19 | AI single-company analysis | ✅ code complete; ⚠️ **blocked at runtime by a restricted API key** — §8.2 |
+| 19 | AI single-company analysis | ✅ code complete and **live** — the Gemini auth bug is fixed, §8.2 |
 | 20 | Thesis Tracker | ✅ |
 | — | Provenance UI polish | ✅ |
 | **P2** | | |
@@ -98,7 +100,7 @@ The API never imports providers or DB models directly; engines never do IO.
 | 22 | Advanced combinable screener | ✅ |
 | 23 | Full industry scoring profiles | ✅ (see §9.4 on why only 2 profiles exist) |
 | 24 | Intelligent alerts (incl. thesis triggers) | ✅ |
-| 25 | NL research assistant | ❌ **Blocked** on the Gemini key — §8.2 |
+| 25 | NL research assistant | ❌ Not started — the Gemini blocker is gone (§8.2), but this step has no code yet, only the design/tool surface |
 | 26 | Score backtesting | ❌ Not started |
 | 27 | Upstox intraday / WebSocket | ❌ Not started |
 | — | Peer-percentile normalization (§X.4) | ✅ 2026-08-29 |
@@ -332,19 +334,29 @@ are proven locally, so this is account creation and env wiring, not code.
 
 ### 8.2 API keys
 
-**Gemini — BROKEN, and it blocks step 25.**
-The key in `backend/.env` is valid for reads but **cannot generate**.
-`GET /v1beta/models` returns 200 in ~0.6 s and lists 40+ models, but
-`POST …:generateContent` either hangs with zero bytes received or returns an
-empty-bodied 404 — identically from the host and from inside the container,
-with Google's own `server: scaffolding on HTTPServer2` header. Not a code,
-network, or model-name problem; the `vary: Referer` header points at an
-**API-key restriction in the Google Cloud console**.
+**Gemini — FIXED 2026-08-29. Unblocks steps 19 (runtime) and 25.**
+Two days of investigation (2026-08-26) blamed an API-key restriction in the
+Google Cloud console — `GET /v1beta/models` returned 200 in ~0.6s while
+`POST …:generateContent` hung with zero bytes, identically from host and
+container, which is exactly what a referrer-restricted key looks like.
+That diagnosis was wrong for this key. The actual cause: **the app
+authenticated with a `?key=` query parameter, and Google's newer
+"account-bound" key type (tied to a service account, created via the
+current Cloud Console flow) hangs indefinitely on that auth method no
+matter how the console restrictions are set** — moving the same key to
+an `x-goog-api-key` header, same request otherwise, returns 200 in ~10s.
+Verified two ways: a raw `curl` with the header succeeded where the
+identical query-param call still hung, and the actual
+`GeminiSummaryProvider.generate()` class (now fixed) called live and
+returned a real model response end to end.
 
-> **Fix:** in the console, set the key's Application restrictions to *None* and
-> ensure API restrictions allow the Generative Language API — or issue a fresh
-> unrestricted key. The exact one-command re-test is in
-> `backend/app/providers/ai/gemini_summary.py`'s module docstring.
+> **Fix, already applied:** `backend/app/providers/ai/gemini_summary.py`
+> now sends the key via `headers={"x-goog-api-key": ...}` instead of
+> `params={"key": ...}`. No console change was actually needed — the key's
+> restrictions were already correct (Application: None, API: Gemini API)
+> the whole time. If a *future* key genuinely is console-restricted, the
+> header form fails the same way the query form used to; the module
+> docstring's diagnostic now checks both to tell the two apart.
 
 The failure path itself was hardened in `eb449e8`, so a broken key now fails in
 ≤45 s (was ~94 s), is negative-cached for 10 minutes, is recorded to
@@ -534,9 +546,11 @@ disagree.
 
 ## 10. Suggested next steps
 
-1. **Fix the Gemini key** (§8.2) — one console change, unblocks step 25.
-   Needs the user's Google Cloud console; not something a coding session
-   can do.
+1. ~~Fix the Gemini key~~ — **done 2026-08-29**, see §8.2. Turned out to be
+   a code fix (auth header, not query param), not a console change. Step
+   19 (AI company summary) is now genuinely live; step 25 (NL research
+   assistant) is unblocked but still needs its own design/build pass — it
+   has no implementation yet, just the P2 spec.
 2. ~~Fix corporate actions~~ — **done 2026-08-29**, see §9.1. Still needs
    `python -m app.jobs.backfill_corporate_actions` run once against the
    production database once it exists/is reachable.
