@@ -307,3 +307,142 @@ def test_sending_to_an_already_verified_account_is_a_no_op(_stub_email: list[str
     assert response.status_code == 200
     assert response.json()["status"] == "already_verified"
     assert len(_stub_email) == 1  # no second email went out
+
+
+def test_password_reset_round_trip_and_old_sessions_die(_stub_email: list[str]) -> None:
+    """The revocation is the security-relevant half. Someone who registered
+    an address they don't own holds a 30-day refresh token; without this
+    they keep it straight through the real owner's recovery."""
+    email = f"reset-{uuid4().hex[:8]}{_CODE_TEST_DOMAIN}"
+    register = client.post(
+        "/api/v1/auth/register", json={"email": email, "password": "password123"}
+    )
+    old_refresh = register.json()["refresh_token"]
+
+    reset_request = client.post(
+        "/api/v1/auth/password-reset/request", json={"email": email}
+    )
+    assert reset_request.status_code == 200
+    confirm = client.post(
+        "/api/v1/auth/password-reset/confirm",
+        json={"email": email, "code": _stub_email[0], "new_password": "a-new-password"},
+    )
+
+    assert confirm.status_code == 200
+    assert "access_token" in confirm.json()
+    # The pre-reset session is dead...
+    stale = client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh})
+    assert stale.status_code == 401
+    # ...but the one just issued works.
+    assert (
+        client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": confirm.json()["refresh_token"]}
+        ).status_code
+        == 200
+    )
+    # And the new password is the one that works.
+    assert (
+        client.post(
+            "/api/v1/auth/login", json={"email": email, "password": "a-new-password"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/v1/auth/login", json={"email": email, "password": "password123"}
+        ).status_code
+        == 401
+    )
+
+
+def test_completing_a_reset_also_verifies_the_address(_stub_email: list[str]) -> None:
+    """Receiving the code is the same proof /verify-email/confirm demands,
+    so leaving the account gated afterwards would be inexplicable."""
+    email = f"resetverify-{uuid4().hex[:8]}{_CODE_TEST_DOMAIN}"
+    client.post("/api/v1/auth/register", json={"email": email, "password": "password123"})
+    client.post("/api/v1/auth/password-reset/request", json={"email": email})
+
+    confirm = client.post(
+        "/api/v1/auth/password-reset/confirm",
+        json={"email": email, "code": _stub_email[0], "new_password": "a-new-password"},
+    )
+    headers = {"Authorization": f"Bearer {confirm.json()['access_token']}"}
+
+    assert client.get("/api/v1/auth/me", headers=headers).json()["email_verified"] is True
+
+
+def test_reset_request_is_200_for_an_address_that_does_not_exist(
+    _stub_email: list[str],
+) -> None:
+    """Any other answer states whether that address has an account."""
+    response = client.post(
+        "/api/v1/auth/password-reset/request", json={"email": "nobody@codes.example.com"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert _stub_email == []  # nothing was sent
+
+
+def test_reset_request_is_200_even_when_throttled(_stub_email: list[str]) -> None:
+    """429 here would itself say "this address has a live code", which says
+    the address is registered — the exact leak the 200 exists to prevent.
+    /verify-email/send can return 429 precisely because it is authenticated."""
+    email = f"resetthrottle-{uuid4().hex[:8]}{_CODE_TEST_DOMAIN}"
+    client.post("/api/v1/auth/register", json={"email": email, "password": "password123"})
+
+    first = client.post("/api/v1/auth/password-reset/request", json={"email": email})
+    second = client.post("/api/v1/auth/password-reset/request", json={"email": email})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(_stub_email) == 1  # the second really was suppressed
+
+
+def test_every_reset_confirm_failure_is_byte_identical(_stub_email: list[str]) -> None:
+    email = f"resetsame-{uuid4().hex[:8]}{_CODE_TEST_DOMAIN}"
+    client.post("/api/v1/auth/register", json={"email": email, "password": "password123"})
+    client.post("/api/v1/auth/password-reset/request", json={"email": email})
+
+    unknown_email = client.post(
+        "/api/v1/auth/password-reset/confirm",
+        json={"email": "nobody@codes.example.com", "code": "123456", "new_password": "xxxxxxxxx"},
+    )
+    wrong_code = client.post(
+        "/api/v1/auth/password-reset/confirm",
+        json={"email": email, "code": "000000", "new_password": "xxxxxxxxx"},
+    )
+
+    assert unknown_email.status_code == wrong_code.status_code == 400
+    assert unknown_email.json() == wrong_code.json()
+
+
+def test_a_reset_code_cannot_be_used_to_verify_an_email(_stub_email: list[str]) -> None:
+    """Purposes are separate credentials; a code minted for one must not
+    satisfy the other."""
+    email = f"crosspurpose-{uuid4().hex[:8]}{_CODE_TEST_DOMAIN}"
+    register = client.post(
+        "/api/v1/auth/register", json={"email": email, "password": "password123"}
+    )
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+    client.post("/api/v1/auth/password-reset/request", json={"email": email})
+
+    response = client.post(
+        "/api/v1/auth/verify-email/confirm", json={"code": _stub_email[0]}, headers=headers
+    )
+
+    assert response.status_code == 400
+
+
+def test_reset_rejects_a_short_new_password(_stub_email: list[str]) -> None:
+    email = f"resetshort-{uuid4().hex[:8]}{_CODE_TEST_DOMAIN}"
+    client.post("/api/v1/auth/register", json={"email": email, "password": "password123"})
+    client.post("/api/v1/auth/password-reset/request", json={"email": email})
+
+    response = client.post(
+        "/api/v1/auth/password-reset/confirm",
+        json={"email": email, "code": _stub_email[0], "new_password": "short"},
+    )
+
+    assert response.status_code == 400
+    assert "8 characters" in response.json()["detail"]

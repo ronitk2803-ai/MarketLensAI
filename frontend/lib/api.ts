@@ -698,6 +698,27 @@ export function confirmVerificationCode(accessToken: string, code: string) {
   });
 }
 
+/** Always resolves with {status: "ok"} — the backend answers identically
+ *  whether or not the address has an account, so the UI must not try to
+ *  infer anything from the response. */
+export function requestPasswordReset(email: string) {
+  return apiFetchRaw<{ status: string }>("/auth/password-reset/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+    cache: "no-store",
+  });
+}
+
+export function confirmPasswordReset(email: string, code: string, newPassword: string) {
+  return apiFetchRaw<AuthTokens>("/auth/password-reset/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code, new_password: newPassword }),
+    cache: "no-store",
+  });
+}
+
 /** Server Components call this directly (not through a Route Handler) —
  * same as getCompany/getPrices/etc., per this app's existing convention
  * that Route Handlers only exist to bridge Client Components that can't

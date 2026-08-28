@@ -42,7 +42,7 @@ export function AuthForm({
         setError(body.error ?? (isRegister ? "Registration failed." : "Sign in failed."));
         return;
       }
-      router.push("/");
+      router.push(isRegister ? "/verify-email" : "/");
       router.refresh();
     } catch {
       setError("Something went wrong — try again in a moment.");
@@ -67,7 +67,17 @@ export function AuthForm({
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="label-caps">Password</span>
+            <span className="flex items-baseline justify-between gap-2">
+              <span className="label-caps">Password</span>
+              {!isRegister && (
+                <Link
+                  href="/forgot-password"
+                  className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  Forgot password?
+                </Link>
+              )}
+            </span>
             <input
               type="password"
               required

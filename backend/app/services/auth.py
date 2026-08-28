@@ -166,3 +166,35 @@ def revoke_refresh_token(db: Session, raw_refresh_token: str) -> None:
         return
     row.revoked_at = dt.datetime.now(dt.UTC)
     db.flush()
+
+
+def revoke_all_refresh_tokens(db: Session, user_id: int) -> int:
+    """Kills every live session for a user. Returns how many were revoked.
+
+    Called on a password reset, and on a Google link that supersedes an
+    unproven password. The threat is concrete: someone who registered an
+    address they don't own — registration alone proves nothing — holds a
+    30-day refresh token, and without this they keep it straight through
+    the real owner's recovery.
+    """
+    revoked = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+        .update({"revoked_at": dt.datetime.now(dt.UTC)}, synchronize_session=False)
+    )
+    db.flush()
+    return int(revoked)
+
+
+def set_password(db: Session, user: AppUser, new_password: str) -> None:
+    """Also marks the address verified, if it wasn't.
+
+    Setting a password through an emailed code proves control of the inbox
+    — the same proof /verify-email/confirm demands — so leaving the account
+    unverified afterwards would gate a user who just demonstrated exactly
+    what the gate asks for, with no way to understand why.
+    """
+    user.hashed_password = hash_password(new_password)
+    if user.email_verified_at is None:
+        user.email_verified_at = dt.datetime.now(dt.UTC)
+    db.flush()

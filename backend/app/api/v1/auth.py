@@ -18,8 +18,10 @@ from app.services.auth import (
     authenticate_user,
     create_user,
     issue_tokens,
+    revoke_all_refresh_tokens,
     revoke_refresh_token,
     rotate_refresh_token,
+    set_password,
 )
 from app.services.auth_codes import (
     CodeInvalid,
@@ -52,6 +54,16 @@ class LogoutRequest(BaseModel):
 
 class VerifyCodeRequest(BaseModel):
     code: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str
 
 
 class TokenResponse(BaseModel):
@@ -181,3 +193,64 @@ def confirm_verification_email(
         raise HTTPException(status_code=400, detail=_BAD_CODE) from error
     mark_email_verified(db, current_user)
     return {"status": "verified"}
+
+
+@router.post("/password-reset/request")
+def request_password_reset(
+    payload: PasswordResetRequest, db: Session = Depends(get_db)
+) -> dict[str, str]:
+    """Always 200, whatever happens.
+
+    Unknown address, throttled, provider down — all identical, because any
+    other answer states whether that address has an account. Note in
+    particular that a throttle here must NOT return 429 the way
+    /verify-email/send does: that endpoint is authenticated so the caller
+    already knows the account exists, while this one is open to anyone.
+
+    The residual side channel is timing — a registered address pays for an
+    outbound email, an unregistered one returns immediately. Left as-is
+    rather than padded, because POST /auth/register still answers 409 for a
+    taken address, which leaks the same fact outright and with no
+    measurement required. Closing that is the prerequisite; padding this
+    first would be theatre.
+    """
+    user = (
+        db.query(AppUser).filter_by(email=payload.email.strip().lower()).one_or_none()
+    )
+    if user is not None:
+        try:
+            send_code(db, user, "password_reset")
+        except (CodeThrottled, ProviderError):
+            pass
+    return {"status": "ok"}
+
+
+@router.post("/password-reset/confirm", response_model=TokenResponse)
+def confirm_password_reset(
+    payload: PasswordResetConfirm, db: Session = Depends(get_db)
+) -> TokenResponse:
+    """Sets the new password and returns a fresh session.
+
+    Allowed even for a Google-only account with no password. Refusing would
+    have to happen here, where the refusal is distinguishable from a bad
+    code and therefore leaks; and it isn't a downgrade anyway, since a
+    Google account's security already rests on control of that inbox.
+    """
+    _min_password_length_check(payload.new_password)
+    user = (
+        db.query(AppUser).filter_by(email=payload.email.strip().lower()).one_or_none()
+    )
+    if user is None:
+        # Byte-identical to a wrong code — see _BAD_CODE.
+        raise HTTPException(status_code=400, detail=_BAD_CODE)
+    try:
+        consume_code(db, user, "password_reset", payload.code.strip())
+    except CodeInvalid as error:
+        raise HTTPException(status_code=400, detail=_BAD_CODE) from error
+
+    # Revoke BEFORE issuing: the other order would kill the pair just
+    # minted and sign the user out of the recovery they just completed.
+    revoke_all_refresh_tokens(db, user.id)
+    set_password(db, user, payload.new_password)
+    access_token, refresh_token = issue_tokens(db, user)
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
