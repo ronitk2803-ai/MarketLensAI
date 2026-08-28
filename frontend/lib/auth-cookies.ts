@@ -1,9 +1,25 @@
-import { cookies } from "next/headers";
-
-/** Derived from the real return type rather than importing Next's
- * internal cookie-store type directly — that lives under a `dist/compiled`
- * path that isn't public API and can move between versions. */
-type CookieStore = Awaited<ReturnType<typeof cookies>>;
+/**
+ * The minimal shape these helpers actually need to WRITE cookies — just
+ * enough that both `next/headers`' cookies() (a Route Handler's own
+ * mutable jar) and a `NextResponse`'s `.cookies` satisfy it structurally,
+ * with no import of NextResponse's type here.
+ *
+ * This split matters for exactly one reason: a route that returns
+ * `Response.redirect(...)` (the plain Fetch API static method) constructs
+ * an independent Response object, and there is no guarantee across Next
+ * versions that mutations made via the separate `cookies()` jar get
+ * merged onto it — versus `NextResponse.redirect(...)`, where writing to
+ * `response.cookies` is guaranteed to land on the exact response being
+ * returned, because it's the same object. Every route that redirects
+ * (google/start, google/callback) passes `response.cookies` here instead
+ * of `await cookies()`; every route that returns Response.json (login,
+ * register, refresh, logout, password-reset/confirm) keeps passing
+ * `await cookies()`, which already works.
+ */
+interface CookieWriter {
+  set(name: string, value: string, options?: Record<string, unknown>): unknown;
+  delete(name: string): unknown;
+}
 
 /**
  * The two httpOnly cookies that ARE the session — no server-side session
@@ -42,7 +58,7 @@ function baseOptions() {
 }
 
 export function setAuthCookies(
-  cookieStore: CookieStore,
+  cookieStore: CookieWriter,
   tokens: { access_token: string; refresh_token: string },
 ) {
   cookieStore.set(ACCESS_TOKEN_COOKIE, tokens.access_token, {
@@ -55,7 +71,7 @@ export function setAuthCookies(
   });
 }
 
-export function clearAuthCookies(cookieStore: CookieStore) {
+export function clearAuthCookies(cookieStore: CookieWriter) {
   cookieStore.delete(ACCESS_TOKEN_COOKIE);
   cookieStore.delete(REFRESH_TOKEN_COOKIE);
 }
@@ -66,7 +82,7 @@ export function clearAuthCookies(cookieStore: CookieStore) {
 export const OAUTH_STATE_COOKIE = "mlai_oauth_state";
 const OAUTH_STATE_MAX_AGE_SECONDS = 600;
 
-export function setOAuthStateCookie(cookieStore: CookieStore, state: string) {
+export function setOAuthStateCookie(cookieStore: CookieWriter, state: string) {
   cookieStore.set(OAUTH_STATE_COOKIE, state, {
     // Deliberately reuses baseOptions() rather than hand-rolling flags.
     // sameSite "lax" is load-bearing here: Google returns via a top-level
@@ -78,6 +94,6 @@ export function setOAuthStateCookie(cookieStore: CookieStore, state: string) {
   });
 }
 
-export function clearOAuthStateCookie(cookieStore: CookieStore) {
+export function clearOAuthStateCookie(cookieStore: CookieWriter) {
   cookieStore.delete(OAUTH_STATE_COOKIE);
 }
