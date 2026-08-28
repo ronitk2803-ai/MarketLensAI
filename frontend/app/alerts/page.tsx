@@ -49,7 +49,7 @@ function AlertRow({ alert }: { alert: UserAlert }) {
           {KIND_LABELS[alert.kind] ?? alert.kind}
         </span>
         <Link
-          href={`/company/${alert.symbol}`}
+          href={`/company/${encodeURIComponent(alert.symbol)}`}
           className="num text-sm font-medium hover:text-primary hover:underline"
         >
           {alert.symbol}

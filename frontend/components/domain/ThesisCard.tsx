@@ -87,7 +87,7 @@ export function ThesisCard({ thesis }: { thesis: Thesis }) {
         <div>
           <h1 className="text-base font-semibold tracking-tight">{thesis.title}</h1>
           <Link
-            href={`/company/${thesis.symbol}`}
+            href={`/company/${encodeURIComponent(thesis.symbol)}`}
             className="num text-sm text-muted-foreground hover:text-primary hover:underline"
           >
             {thesis.symbol}

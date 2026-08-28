@@ -67,7 +67,7 @@ export function SearchBox({ className }: { className?: string }) {
     setOpen(false);
     setQuery("");
     inputRef.current?.blur();
-    router.push(`/company/${symbol}`);
+    router.push(`/company/${encodeURIComponent(symbol)}`);
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {

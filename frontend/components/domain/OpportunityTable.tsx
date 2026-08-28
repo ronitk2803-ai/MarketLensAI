@@ -149,7 +149,7 @@ export function OpportunityTable({ hits }: { hits: OpportunityHit[] }) {
               <td className="num px-3 py-1.5 text-right text-muted-foreground">{hit.rank}</td>
               <td className="py-1.5">
                 <Link
-                  href={`/company/${hit.symbol}`}
+                  href={`/company/${encodeURIComponent(hit.symbol)}`}
                   className="num font-medium hover:text-primary hover:underline"
                 >
                   {hit.symbol}

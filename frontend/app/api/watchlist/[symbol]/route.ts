@@ -13,7 +13,11 @@ export async function POST(_request: Request, { params }: { params: Promise<{ sy
   const accessToken = await requireAccessToken();
   if (!accessToken) return Response.json({ error: "not signed in" }, { status: 401 });
 
-  const { symbol } = await params;
+  // Same decode as app/company/[symbol]/page.tsx: `params.symbol` arrives
+  // still percent-encoded, and addToWatchlist/removeFromWatchlist encode
+  // again — without this, watchlisting M&M, J&KBANK, etc. silently fails.
+  const { symbol: rawSymbol } = await params;
+  const symbol = decodeURIComponent(rawSymbol);
   try {
     await addToWatchlist(accessToken, symbol);
     return Response.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });
@@ -33,7 +37,8 @@ export async function DELETE(
   const accessToken = await requireAccessToken();
   if (!accessToken) return Response.json({ error: "not signed in" }, { status: 401 });
 
-  const { symbol } = await params;
+  const { symbol: rawSymbol } = await params;
+  const symbol = decodeURIComponent(rawSymbol);
   try {
     await removeFromWatchlist(accessToken, symbol);
     return Response.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });

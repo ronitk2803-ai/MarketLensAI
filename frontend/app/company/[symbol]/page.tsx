@@ -38,7 +38,19 @@ export default async function CompanyPage({
   params: Promise<{ symbol: string }>;
   searchParams: Promise<{ range?: string }>;
 }) {
-  const { symbol } = await params;
+  const { symbol: rawSymbol } = await params;
+  // Next does NOT decode a dynamic segment before handing it over as
+  // `params.symbol` — verified live: reaching this route via a full
+  // navigation (address bar, a shared link, this tool's own `navigate`)
+  // for the real NSE symbol "J&KBANK" produced `params.symbol ===
+  // "J%26KBANK"`, still percent-encoded. Every getX(symbol) call below
+  // encodes again before hitting the backend, so without this decode a
+  // real, active company (J&KBANK, M&M, M&MFIN, ARE&M, GVT&D — every
+  // symbol containing a character outside [A-Za-z0-9-]) silently
+  // double-encodes into a string nothing matches and 404s. Decoding a
+  // plain symbol with nothing to decode is a no-op, so this is safe for
+  // the other ~495.
+  const symbol = decodeURIComponent(rawSymbol);
   const { range: rawRange } = await searchParams;
   const range = isPriceRange(rawRange) ? rawRange : "1y";
 

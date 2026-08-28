@@ -272,7 +272,7 @@ function WatchlistRow({
   return (
     <tr className="border-b border-border/60 last:border-0 hover:bg-accent/40">
       <td className="min-w-0 px-3 py-2">
-        <Link href={`/company/${quote.symbol}`} className="block">
+        <Link href={`/company/${encodeURIComponent(quote.symbol)}`} className="block">
           <span className="num block font-medium whitespace-nowrap">{quote.symbol}</span>
           <span className="block max-w-[160px] truncate text-[11px] text-muted-foreground">
             {quote.name}

@@ -44,7 +44,7 @@ export function PriceChartPanel({
             {RANGES.map((r) => (
               <Link
                 key={r}
-                href={`/company/${symbol}?range=${r}`}
+                href={`/company/${encodeURIComponent(symbol)}?range=${r}`}
                 className={cn(
                   "num rounded-sm px-2 py-0.5 text-[11px] transition-colors",
                   r === range

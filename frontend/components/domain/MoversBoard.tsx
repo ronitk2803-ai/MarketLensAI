@@ -92,7 +92,7 @@ export function MoversBoard({
             return (
               <li key={hit.symbol} className="border-b border-border/60 last:border-0">
                 <Link
-                  href={`/company/${hit.symbol}`}
+                  href={`/company/${encodeURIComponent(hit.symbol)}`}
                   className={cn(
                     "flex items-center gap-2 px-3 hover:bg-accent/40",
                     expanded ? "py-2.5" : "py-1.5",
