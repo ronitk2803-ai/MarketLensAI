@@ -79,6 +79,17 @@ services:
       # into this compose file, so the containerized deploy always 502'd
       # with "GEMINI_API_KEY not configured" even though local dev worked.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Verification and password-reset email. Same warning as GEMINI_API_KEY
+      # below: setting these only in backend/.env leaves the container
+      # unconfigured and every send 502s while bare-metal dev works fine.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-MarketLens AI <onboarding@resend.dev>}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Defaults to the container's own port, NOT dev's 3000 — this file only
+      # ever runs the 3100 stack, and a mismatch here fails at the user's
+      # browser with a Google error page rather than in our logs.
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3100/api/auth/google/callback}
     ports:
       - "8000:8000"
     healthcheck:

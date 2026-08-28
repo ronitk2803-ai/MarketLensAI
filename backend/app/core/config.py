@@ -29,6 +29,29 @@ class Settings(BaseSettings):
     # why generation stays inside free-tier limits regardless of traffic.
     gemini_api_key: str | None = None
 
+    # Resend (transactional email) — the verification and password-reset
+    # codes. Optional like every other provider credential: unset simply
+    # means those flows return a 502 naming the missing setting, rather
+    # than the app refusing to boot for deployments that don't use them.
+    # NOTE: until a domain is verified at resend.com/domains, the default
+    # onboarding@resend.dev sender only delivers to the Resend account
+    # owner's own address — see app/providers/email/resend.py.
+    resend_api_key: str | None = None
+    resend_from_email: str = "MarketLens AI <onboarding@resend.dev>"
+
+    # Google OAuth ("Sign in with Google"). Entirely separate from the
+    # Upstox OAuth above, which is a market-data concern and never touches
+    # a user account (Build_plan.md §G).
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    # Must match a redirect URI registered in the Google Cloud console
+    # EXACTLY, and differs per environment — :3000 bare-metal dev, :3100
+    # for the prod container. Held here rather than in the frontend so the
+    # value sent in the authorize URL and the one sent in the token
+    # exchange cannot drift apart, which Google rejects with a famously
+    # unhelpful error.
+    google_redirect_uri: str | None = None
+
     # Shared secret gating /admin/* endpoints until a real auth system exists (P1).
     admin_token: str | None = None
 
