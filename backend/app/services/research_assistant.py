@@ -45,6 +45,11 @@ from app.services.adjusted_prices import get_adjusted_bars
 from app.services.corporate_actions import get_stored_corporate_actions
 from app.services.fundamentals import get_or_fetch_ratios
 from app.services.historical_episodes import get_historical_falls
+from app.services.indian_units import (
+    RUPEE_METRICS,
+    SHARE_COUNT_METRICS,
+    format_metric_for_prose,
+)
 from app.services.news import get_or_fetch_news
 from app.services.opportunities import list_industries, run_ranked_screen_with_sparklines
 from app.services.portfolio import list_holdings
@@ -105,6 +110,20 @@ _GENERAL_KNOWLEDGE_RULE = (
     "memory, even approximately."
 )
 
+# Verified live 2026-08-30: unguided, the model narrates a raw market-cap
+# figure using Western units ("$1.6 trillion") even though a
+# get_fundamentals call already hands it back pre-formatted in Indian
+# convention — this is belt-and-suspenders for any other large rupee
+# figure that isn't already pre-formatted (e.g. one it recalls as
+# labeled general knowledge), not a substitute for pre-formatting the
+# tool output itself.
+_INDIAN_UNITS_RULE = (
+    "This app is entirely about Indian equities — always express rupee "
+    "amounts in Indian convention (lakh = 1,00,000, crore = 1,00,00,000, "
+    "lakh crore = 1,00,000 crore), e.g. \"₹1.6 lakh crore\", never Western "
+    "units like million/billion/trillion."
+)
+
 SYSTEM_INSTRUCTION = (
     "You are MarketLens AI's research assistant, helping someone research "
     "Indian equities. For any company-specific fact, price, or metric, use "
@@ -112,6 +131,7 @@ SYSTEM_INSTRUCTION = (
     "from a tool. If a tool reports data as unavailable or a symbol as "
     "unknown, say so plainly rather than filling the gap yourself.\n\n"
     f"{_GENERAL_KNOWLEDGE_RULE}\n\n"
+    f"{_INDIAN_UNITS_RULE}\n\n"
     "Call whichever tools the question needs, in whatever order makes "
     "sense — you may call several before answering. Once you have enough "
     "to answer, respond in plain text, not another tool call.\n\n"
@@ -239,12 +259,28 @@ def _tool_fundamentals(db: Session, _user: AppUser, symbol: str) -> dict:
     if asset is None:
         return _unknown_symbol(symbol)
     ratios = get_or_fetch_ratios(db, asset)
+    # marketCap/share counts pre-formatted into Indian-convention prose
+    # (₹X lakh crore, X.XX crore shares) here, not left for the model to
+    # convert — same reasoning as company_summary.py's prompt, see
+    # app/services/indian_units.py's module docstring.
+    ratio_dict: dict[str, float | str] = {}
+    for r in ratios:
+        value = float(r.value)
+        if r.metric in RUPEE_METRICS or r.metric in SHARE_COUNT_METRICS:
+            ratio_dict[r.metric] = format_metric_for_prose(r.metric, value)
+        else:
+            ratio_dict[r.metric] = value
     return _jsonable(
         {
             "symbol": asset.symbol,
-            "ratios": {r.metric: r.value for r in ratios},
+            "ratios": ratio_dict,
             "confidence": "low",
-            "note": "Single, uncross-checked source — always low confidence by design.",
+            "note": (
+                "Single, uncross-checked source — always low confidence by "
+                "design. marketCap and share counts are already in Indian "
+                "convention (lakh/crore) — use them exactly as given, never "
+                "convert to million/billion/trillion."
+            ),
         }
     )
 

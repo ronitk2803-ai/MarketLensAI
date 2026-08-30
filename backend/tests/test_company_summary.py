@@ -97,6 +97,26 @@ def test_prompt_omits_missing_technicals_rather_than_showing_none() -> None:
     assert "Volume vs" not in prompt
 
 
+def test_prompt_formats_market_cap_in_indian_convention_not_western_units() -> None:
+    """Live bug, 2026-08-30: unguided, the model narrated a raw marketCap
+    figure as "$1.6 trillion" — correct arithmetic, wrong convention for
+    an app entirely about Indian equities. This is now pre-formatted in
+    code (app/services/indian_units.py), not left to the model."""
+    ratios = [_ratio("marketCap", 1.6e12), _ratio("trailingPE", 23.8)]
+
+    prompt = _build_prompt(_asset_row(), ratios, [], FULL_INPUTS, 491.4)
+
+    assert "marketCap: ₹1.60 lakh crore" in prompt
+    # "trillion" legitimately appears once, in the instruction telling the
+    # model not to use it — the actual figure itself must never be
+    # rendered that way.
+    assert "1.6e+12" not in prompt
+    assert "1600000000000" not in prompt
+    # A genuine ratio must still pass through as a bare number, not get
+    # run through the same rupee conversion.
+    assert "trailingPE: 23.8" in prompt
+
+
 def test_prompt_says_limited_coverage_when_everything_is_missing() -> None:
     empty = ScoreInputs()
 

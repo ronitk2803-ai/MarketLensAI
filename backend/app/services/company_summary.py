@@ -39,6 +39,7 @@ from app.providers.errors import ProviderError
 from app.providers.fetch_log import record_fetch
 from app.services.adjusted_prices import get_adjusted_bars
 from app.services.fundamentals import get_or_fetch_ratios
+from app.services.indian_units import format_metric_for_prose
 from app.services.news import get_or_fetch_news
 from app.services.scoring import gather_score_inputs
 
@@ -107,7 +108,16 @@ def _build_prompt(
     inputs: ScoreInputs,
     latest_close: float | None,
 ) -> str:
-    ratio_lines = "\n".join(f"- {r.metric}: {r.value}" for r in ratios)
+    # marketCap/sharesOutstanding/floatShares are pre-formatted into
+    # Indian-convention prose (₹X lakh crore, X.XX crore shares) here, not
+    # left for the model to convert itself — verified live: unguided, it
+    # narrates a raw marketCap figure as "$1.6 trillion", correct
+    # arithmetic but the wrong convention for an app entirely about
+    # Indian equities. See app/services/indian_units.py's module
+    # docstring for why this is a code concern, not a prompt-wording one.
+    ratio_lines = "\n".join(
+        f"- {r.metric}: {format_metric_for_prose(r.metric, float(r.value))}" for r in ratios
+    )
     # Dated and attributed, not bare titles. get_or_fetch_news looks back 30
     # days, so an undated list mixes this morning's headline with one from
     # four weeks ago and the model has no way to tell them apart — it will
@@ -153,6 +163,9 @@ def _build_prompt(
         "more heavily, and when you refer to something from more than a "
         "week ago, say when it happened rather than implying it is "
         "current news.\n\n"
+        "Market cap and share counts below are already given in Indian "
+        "convention (lakh/crore) — use them exactly as given, never "
+        "convert to million/billion/trillion.\n\n"
         f"Latest close: {latest_close if latest_close is not None else 'unavailable'}\n\n"
         f"Key ratios:\n{ratio_lines or '(none available)'}\n\n"
         f"Technicals:\n{technical_lines or '(none available)'}\n\n"

@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
-from app.db.models import AppUser, Asset, Company, Industry, PriceOHLCV
+from app.db.models import AppUser, Asset, Company, FinancialMetric, Industry, PriceOHLCV
 from app.providers.ai.gemini_chat import FunctionCall, GeminiChatProvider, StepResult
 from app.providers.errors import ProviderError
 from app.services.portfolio import add_or_update_holding
@@ -15,6 +15,7 @@ from app.services.research_assistant import (
     TOOLS,
     _dispatch,
     _tool_company_overview,
+    _tool_fundamentals,
     _tool_my_portfolio,
     _tool_my_watchlist,
     _tool_run_screen,
@@ -133,6 +134,34 @@ def test_company_overview_returns_real_data_for_a_known_symbol(db: Session) -> N
     assert result["sector"] == "Test Sector"
     assert result["industry"] == "Test Industry"
     assert result["latest_close"] == pytest.approx(123.45)
+
+
+def test_fundamentals_formats_market_cap_in_indian_convention(db: Session) -> None:
+    asset = _asset(db, "ZZASSISTFUND")
+    db.add(
+        FinancialMetric(
+            asset_id=asset.id,
+            metric="marketCap",
+            value=Decimal("1600000000000"),
+            source="test",
+            confidence="low",
+        )
+    )
+    db.add(
+        FinancialMetric(
+            asset_id=asset.id,
+            metric="trailingPE",
+            value=Decimal("23.8"),
+            source="test",
+            confidence="low",
+        )
+    )
+    db.flush()
+
+    result = _tool_fundamentals(db, None, "ZZASSISTFUND")  # type: ignore[arg-type]
+
+    assert result["ratios"]["marketCap"] == "₹1.60 lakh crore"
+    assert result["ratios"]["trailingPE"] == 23.8  # a ratio stays a bare number
 
 
 def test_my_portfolio_is_scoped_to_the_calling_user_only(db: Session) -> None:
