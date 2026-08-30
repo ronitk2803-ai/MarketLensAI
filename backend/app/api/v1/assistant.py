@@ -21,6 +21,12 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
+    # Set by the "ask about this company" follow-up next to the AI summary
+    # panel — not validated against a real asset here (an unknown/stale
+    # symbol just means the model's get_company_overview call reports it
+    # unknown, same as any other tool miss; nothing about this field is
+    # trusted beyond plain text folded into the question).
+    symbol: str | None = Field(default=None, max_length=32)
 
 
 @router.post("/ask", dependencies=[rate_limited("nl_assistant")])
@@ -34,7 +40,13 @@ def ask_assistant(
         raise HTTPException(status_code=502, detail="GEMINI_API_KEY_1 not configured")
 
     try:
-        answer = ask(db, current_user, payload.question, api_keys=settings.gemini_api_keys)
+        answer = ask(
+            db,
+            current_user,
+            payload.question,
+            api_keys=settings.gemini_api_keys,
+            context_symbol=payload.symbol,
+        )
     except ProviderError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 

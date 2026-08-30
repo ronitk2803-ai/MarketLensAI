@@ -289,6 +289,27 @@ def test_ask_dispatches_an_unknown_tool_name_as_an_error_response_not_a_crash(
     assert answer.text == "I couldn't find that tool."
 
 
+def test_ask_folds_context_symbol_into_the_opening_message(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The company-page follow-up (2026-08-30) passes context_symbol so a
+    symbol-free question like "why did it fall?" resolves to the right
+    company, the same way a human reading it in that context would."""
+    user = _user(db, "zzassist-context@example.com")
+    seen_contents = []
+
+    def fake_step(self: GeminiChatProvider, **kwargs: object) -> StepResult:
+        seen_contents.append(kwargs["contents"])
+        return StepResult(function_call=None, text="answer", raw_part={})
+
+    monkeypatch.setattr(GeminiChatProvider, "step", fake_step)
+    ask(db, user, "why did it fall?", api_keys=["fake-key"], context_symbol="RELIANCE")
+
+    first_turn_text = seen_contents[0][0]["parts"][0]["text"]
+    assert "RELIANCE" in first_turn_text
+    assert "why did it fall?" in first_turn_text
+
+
 def test_max_tool_calls_is_a_small_positive_bound() -> None:
     """Sanity guard: this is a real safety bound, not accidentally 0 or
     unbounded."""
@@ -299,6 +320,17 @@ def test_system_instruction_carries_the_no_advice_and_sebi_language() -> None:
     assert "recommend" in SYSTEM_INSTRUCTION.lower()
     assert "sebi" in SYSTEM_INSTRUCTION.lower()
     assert "investment advice" in SYSTEM_INSTRUCTION.lower()
+
+
+def test_system_instruction_requires_labeling_general_knowledge_and_bans_it_for_numbers() -> None:
+    """2026-08-30: qualitative general knowledge is allowed but must be
+    labeled; quantitative general knowledge (a number not from a tool)
+    stays banned outright — the actual harm 'never fabricate' guards
+    against is a wrong number read as authoritative, not a labeled aside."""
+    lowered = SYSTEM_INSTRUCTION.lower()
+    assert "general knowledge" in lowered
+    assert "not verified in this app" in lowered
+    assert "never do this for anything quantitative" in lowered
 
 
 def test_every_tool_schema_only_exposes_arguments_its_handler_accepts_with_defaults() -> None:

@@ -81,14 +81,37 @@ _ANALYSIS_STRUCTURE = (
     "rather than padding them — an empty section is worse than no section."
 )
 
+# Deliberately narrower than "no general knowledge at all" — the user
+# explicitly asked for qualitative background (what a company does,
+# sector context) rather than a strictly tool-only assistant, 2026-08-30.
+# The line that must never move is quantitative: a wrong *number* is the
+# actual harm this app's "never fabricate" principle exists to prevent
+# (product_principles.md #14, "never present speculation as fact"), and a
+# fluent, unlabeled wrong number reads as authoritative in exactly the way
+# a labeled qualitative aside doesn't. So: qualitative general knowledge
+# is allowed, but only ever labeled, never blended in as if it were
+# app data; quantitative general knowledge is never allowed, full stop —
+# "unavailable" is always the honest answer over a recalled-from-memory
+# figure that could be stale or wrong.
+_GENERAL_KNOWLEDGE_RULE = (
+    "You may add general background knowledge you already have — what a "
+    "company does, its sector, well-known public history or context — to "
+    "supplement tool data, but only ever as clearly labeled qualitative "
+    "context, e.g. prefix it with \"From general knowledge (not verified in "
+    "this app's data):\". Never do this for anything quantitative: a price, "
+    "ratio, score, percentage, date, or count must always come from a tool "
+    "call, never from what you already know. If a tool doesn't have a "
+    "number, say it's unavailable — do not estimate or recall one from "
+    "memory, even approximately."
+)
+
 SYSTEM_INSTRUCTION = (
     "You are MarketLens AI's research assistant, helping someone research "
-    "Indian equities using only the tools provided. You have NO knowledge "
-    "of any company's current numbers, news, or price action beyond what a "
-    "tool call returns in this conversation — never state a metric, price, "
-    "or fact you have not just received from a tool. If a tool reports data "
-    "as unavailable or a symbol as unknown, say so plainly rather than "
-    "filling the gap from general knowledge.\n\n"
+    "Indian equities. For any company-specific fact, price, or metric, use "
+    "the tools provided — never state a number you have not just received "
+    "from a tool. If a tool reports data as unavailable or a symbol as "
+    "unknown, say so plainly rather than filling the gap yourself.\n\n"
+    f"{_GENERAL_KNOWLEDGE_RULE}\n\n"
     "Call whichever tools the question needs, in whatever order makes "
     "sense — you may call several before answering. Once you have enough "
     "to answer, respond in plain text, not another tool call.\n\n"
@@ -599,14 +622,34 @@ def _dispatch(db: Session, user: AppUser, call: FunctionCall) -> dict:
         return {"error": f"{call.name} failed unexpectedly — try a different question"}
 
 
-def ask(db: Session, user: AppUser, question: str, *, api_keys: list[str]) -> AssistantAnswer:
+def ask(
+    db: Session,
+    user: AppUser,
+    question: str,
+    *,
+    api_keys: list[str],
+    context_symbol: str | None = None,
+) -> AssistantAnswer:
     """Runs the full tool-calling conversation for one question and
     returns the model's final grounded answer. Stateless across calls —
     Build_plan.md §S step 25 is scoped to single-question research, not a
-    persisted multi-turn chat thread; see the module docstring."""
+    persisted multi-turn chat thread; see the module docstring.
+
+    `context_symbol` is set when the question comes from a company page
+    (the "ask about this company" follow-up next to the AI summary,
+    2026-08-30) — it's folded into the first user turn as plain text, not
+    a separate field, so the model naturally resolves which company a
+    symbol-free follow-up like "why did it fall?" is actually about,
+    exactly the way a human reading the question in that context would.
+    """
     provider = GeminiChatProvider(api_keys)
     tools = _function_declarations()
-    contents: list[dict] = [{"role": "user", "parts": [{"text": question}]}]
+    opening = (
+        f"(The user is currently viewing the company page for {context_symbol}.) {question}"
+        if context_symbol
+        else question
+    )
+    contents: list[dict] = [{"role": "user", "parts": [{"text": opening}]}]
     tools_used: list[str] = []
 
     for _ in range(MAX_TOOL_CALLS):

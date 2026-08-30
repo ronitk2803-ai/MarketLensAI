@@ -7,6 +7,7 @@ import { LivePrice } from "@/components/domain/LivePrice";
 import { NewsPanel } from "@/components/domain/NewsPanel";
 import { PriceChartPanel } from "@/components/domain/PriceChartPanel";
 import { ProvenanceBadge } from "@/components/domain/ProvenanceBadge";
+import { ResearchAssistantPanel } from "@/components/domain/ResearchAssistantPanel";
 import { ScorePanel } from "@/components/domain/ScorePanel";
 import { TechnicalPanel } from "@/components/domain/TechnicalPanel";
 import { compact, price, tradingDate } from "@/lib/format";
@@ -193,6 +194,12 @@ export default async function CompanyPage({
         meta={aiSummary.meta}
         canGenerate={user !== null}
       />
+
+      {/* Same "signed in, verification enforced server-side" gate as the
+          AI summary above — an unverified user's question still reaches
+          the backend and surfaces its 403 as a normal error, rather than
+          this panel trying to duplicate that check client-side. */}
+      {user !== null && <ResearchAssistantPanel symbol={header.symbol} />}
 
       <div className="grid gap-3 xl:grid-cols-[1fr_420px]">
         <FundamentalsPanel

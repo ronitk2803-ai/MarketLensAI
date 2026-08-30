@@ -12,13 +12,25 @@ import { Panel } from "@/components/terminal/Panel";
  * component keeps a local, in-memory list of past Q&A pairs purely for
  * the reader's own scrollback within one page visit — nothing here is
  * saved server-side, and reloading the page starts fresh.
+ *
+ * `symbol`, when given, scopes every question to that company (the
+ * "ask about this company" follow-up next to AiSummaryPanel, 2026-08-30)
+ * — sent alongside each question so a symbol-free "why did it fall?"
+ * resolves to the right company without the reader retyping the ticker.
  */
 
-const EXAMPLE_QUESTIONS = [
+const GENERAL_EXAMPLES = [
   "Has RELIANCE fallen this much before, and did it recover?",
   "Compare TCS with its industry peers.",
   "Find companies with unusual trading volume recently.",
   "Summarize my portfolio.",
+];
+
+const COMPANY_EXAMPLES = [
+  "Why has this fallen recently?",
+  "Has this happened before?",
+  "How does it compare to its industry peers?",
+  "What does this company actually do?",
 ];
 
 interface Turn {
@@ -28,10 +40,11 @@ interface Turn {
   error?: string;
 }
 
-export function ResearchAssistantPanel() {
+export function ResearchAssistantPanel({ symbol }: { symbol?: string }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [loading, setLoading] = useState(false);
+  const examples = symbol ? COMPANY_EXAMPLES : GENERAL_EXAMPLES;
 
   async function submit(q: string) {
     const trimmed = q.trim();
@@ -45,7 +58,7 @@ export function ResearchAssistantPanel() {
       const res = await fetch("/api/assistant/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: trimmed }),
+        body: JSON.stringify(symbol ? { question: trimmed, symbol } : { question: trimmed }),
       });
       const body = await res.json();
       setTurns((prev) => {
@@ -73,19 +86,19 @@ export function ResearchAssistantPanel() {
 
   return (
     <Panel
-      title="Research assistant"
-      footnote="AI-generated answers, grounded only in this app's own stored data — never a general-knowledge guess. Produced for research and analytical purposes only, not investment advice. MarketLens AI is not a SEBI-registered investment adviser or research analyst."
+      title={symbol ? `Ask about ${symbol}` : "Research assistant"}
+      footnote="AI-generated answers — numbers and facts about specific companies come only from this app's own stored data; any general background knowledge is explicitly labeled as such, not verified here. Produced for research and analytical purposes only, not investment advice. MarketLens AI is not a SEBI-registered investment adviser or research analyst."
     >
       <div className="flex flex-col gap-4 px-1 py-2">
         {turns.length === 0 ? (
           <div className="flex flex-col gap-2 px-2 py-4">
             <p className="text-xs text-muted-foreground">
-              Ask a research question in plain language — the assistant looks up real data
-              (scores, technicals, history, news, your portfolio) before answering, and says so
-              when it can&rsquo;t find something rather than guessing.
+              {symbol
+                ? `Ask a follow-up about ${symbol} — the assistant looks up its real data before answering, and says so when it can't find something rather than guessing.`
+                : "Ask a research question in plain language — the assistant looks up real data (scores, technicals, history, news, your portfolio) before answering, and says so when it can't find something rather than guessing."}
             </p>
             <div className="flex flex-col gap-1.5">
-              {EXAMPLE_QUESTIONS.map((q) => (
+              {examples.map((q) => (
                 <button
                   key={q}
                   type="button"
@@ -143,7 +156,7 @@ export function ResearchAssistantPanel() {
                 submit(question);
               }
             }}
-            placeholder="Ask a research question…"
+            placeholder={symbol ? `Ask about ${symbol}…` : "Ask a research question…"}
             rows={2}
             disabled={loading}
             className="min-w-0 flex-1 resize-none rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm outline-none focus:border-primary disabled:opacity-50"

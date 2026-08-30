@@ -13,13 +13,17 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   let question: unknown;
+  let symbol: unknown;
   try {
-    ({ question } = await request.json());
+    ({ question, symbol } = await request.json());
   } catch {
     return Response.json({ error: "invalid request body" }, { status: 400 });
   }
   if (typeof question !== "string" || question.trim().length === 0) {
     return Response.json({ error: "missing question" }, { status: 400 });
+  }
+  if (symbol !== undefined && typeof symbol !== "string") {
+    return Response.json({ error: "invalid symbol" }, { status: 400 });
   }
 
   const accessToken = (await cookies()).get(ACCESS_TOKEN_COOKIE)?.value;
@@ -28,7 +32,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const answer = await askResearchAssistant(accessToken, question);
+    const answer = await askResearchAssistant(accessToken, question, symbol);
     return Response.json(answer, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const status = error instanceof ApiError ? error.status : 502;

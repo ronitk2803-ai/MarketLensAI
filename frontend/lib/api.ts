@@ -599,14 +599,14 @@ export interface AssistantAnswer {
  * as watchlist add/remove above). Rate-limited and auth-gated on the
  * backend (app/api/v1/assistant.py) — one question can be several Gemini
  * calls, not one. */
-export function askResearchAssistant(accessToken: string, question: string) {
+export function askResearchAssistant(accessToken: string, question: string, symbol?: string) {
   return apiFetchRaw<AssistantAnswer>("/assistant/ask", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(symbol ? { question, symbol } : { question }),
     cache: "no-store",
   });
 }
