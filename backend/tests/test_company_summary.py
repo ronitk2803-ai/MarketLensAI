@@ -190,7 +190,7 @@ def _stub_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cs, "gather_score_inputs", lambda db, asset: ScoreInputs())
 
     class _Settings:
-        gemini_api_key = "test-key"
+        gemini_api_keys = ["test-key"]
 
     monkeypatch.setattr(cs, "get_settings", lambda: _Settings())
 

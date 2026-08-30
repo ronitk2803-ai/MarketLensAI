@@ -25,9 +25,24 @@ class Settings(BaseSettings):
     upstox_redirect_uri: str | None = None
 
     # Gemini's free tier (rate-limited, no cost) — used for the click-
-    # triggered AI company summary. See app/services/company_summary.py for
-    # why generation stays inside free-tier limits regardless of traffic.
-    gemini_api_key: str | None = None
+    # triggered AI company summary and the NL research assistant. See
+    # app/services/company_summary.py for why generation stays inside
+    # free-tier limits regardless of traffic.
+    #
+    # Up to 4 keys, tried in order as a fallback pool (app/providers/ai/
+    # gemini_summary.py) — verified live 2026-08-30 that this is genuinely
+    # useful: two keys from separate Google accounts both intermittently
+    # 503 on the same overloaded model at the same moment, so a second
+    # *account* doesn't reliably route around that on its own (see
+    # MODEL_FALLBACK_CHAIN, which is what actually fixed that case) — but
+    # a key can still fail on its own (quota exhaustion, a 429 specific to
+    # one account), and that's what the pool is really insurance against.
+    # This is deliberately NOT a way to sum free-tier quota across
+    # accounts — it's redundancy for one application's own reliability.
+    gemini_api_key_1: str | None = None
+    gemini_api_key_2: str | None = None
+    gemini_api_key_3: str | None = None
+    gemini_api_key_4: str | None = None
 
     # Resend (transactional email) — the verification and password-reset
     # codes. Optional like every other provider credential: unset simply
@@ -93,6 +108,18 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def gemini_api_keys(self) -> list[str]:
+        """Every configured Gemini key, in fallback order. Empty if none
+        configured — callers check this, not the individual fields."""
+        keys = [
+            self.gemini_api_key_1,
+            self.gemini_api_key_2,
+            self.gemini_api_key_3,
+            self.gemini_api_key_4,
+        ]
+        return [k for k in keys if k]
 
 
 @lru_cache

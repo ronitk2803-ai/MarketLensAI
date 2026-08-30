@@ -79,12 +79,15 @@ services:
       # pattern above; set a real one in the root .env for anything that
       # isn't purely local (see .env's own comment).
       JWT_SECRET: ${JWT_SECRET:-dev-insecure-secret-change-me}
-      # Gemini free tier — the click-triggered AI company summary. Was set
-      # in backend/.env for the bare-metal local dev server but never wired
-      # into this compose file, so the containerized deploy always 502'd
-      # with "GEMINI_API_KEY not configured" even though local dev worked.
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      # Verification and password-reset email. Same warning as GEMINI_API_KEY
+      # Gemini free tier — the click-triggered AI company summary and the
+      # NL research assistant. Up to 4 keys tried as a fallback pool
+      # (app/providers/ai/gemini_summary.py) — only _1 is required, the
+      # rest are optional resilience across separate Google accounts.
+      GEMINI_API_KEY_1: ${GEMINI_API_KEY_1:-}
+      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:-}
+      GEMINI_API_KEY_3: ${GEMINI_API_KEY_3:-}
+      GEMINI_API_KEY_4: ${GEMINI_API_KEY_4:-}
+      # Verification and password-reset email. Same warning as GEMINI_API_KEY_1
       # below: setting these only in backend/.env leaves the container
       # unconfigured and every send 502s while bare-metal dev works fine.
       RESEND_API_KEY: ${RESEND_API_KEY:-}

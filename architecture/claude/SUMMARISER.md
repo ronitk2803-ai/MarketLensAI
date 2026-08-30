@@ -255,14 +255,14 @@ python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 | `JWT_SECRET` | **yes, no default** | app won't boot without it |
 | `CORS_ORIGINS` | yes in prod | comma-separated; must list the frontend's public URL |
 | `ADMIN_TOKEN` | for `/admin/*` | unset simply leaves admin routes unreachable |
-| `GEMINI_API_KEY` | for AI summary | **currently restricted — §8.2** |
+| `GEMINI_API_KEY_1` (`_2`/`_3`/`_4` optional) | for AI summary + NL assistant | fallback pool, §8.2 — live and working |
 | `UPSTOX_API_KEY` / `_SECRET` / `_REDIRECT_URI` | for Upstox data | Bhavcopy covers EOD without it |
 | `ENABLE_SCHEDULER` | off by default | `true` only on an always-on instance |
 | `DAILY_INGESTION_HOUR_IST` | default `20` | 20:00 IST, after Bhavcopy publishes |
 | `API_BASE_URL` (frontend) | yes in prod | backend URL + `/api/v1` |
 
 Root `.env` (gitignored) feeds `${VAR}` substitution into
-`docker-compose.prod.yml`: currently `GEMINI_API_KEY` and `JWT_SECRET`.
+`docker-compose.prod.yml`: currently `GEMINI_API_KEY_1`..`_4` and `JWT_SECRET`.
 
 ---
 
@@ -334,21 +334,35 @@ are proven locally, so this is account creation and env wiring, not code.
 
 ### 8.2 API keys
 
-**Gemini — FIXED 2026-08-29. Unblocks steps 19 (runtime) and 25.**
-Two days of investigation (2026-08-26) blamed an API-key restriction in the
-Google Cloud console — `GET /v1beta/models` returned 200 in ~0.6s while
-`POST …:generateContent` hung with zero bytes, identically from host and
-container, which is exactly what a referrer-restricted key looks like.
-That diagnosis was wrong for this key. The actual cause: **the app
-authenticated with a `?key=` query parameter, and Google's newer
-"account-bound" key type (tied to a service account, created via the
-current Cloud Console flow) hangs indefinitely on that auth method no
-matter how the console restrictions are set** — moving the same key to
-an `x-goog-api-key` header, same request otherwise, returns 200 in ~10s.
-Verified two ways: a raw `curl` with the header succeeded where the
-identical query-param call still hung, and the actual
-`GeminiSummaryProvider.generate()` class (now fixed) called live and
-returned a real model response end to end.
+**Gemini — FIXED 2026-08-30. Unblocks steps 19 (runtime) and 25.** Two
+separate bugs, discovered on two different nights, each looking identical
+to the other from the outside (a 502/hang after a long wait):
+
+1. **Auth method (fixed 2026-08-28).** The app authenticated with a
+   `?key=` query parameter; Google's newer "account-bound" key type
+   (tied to a service account, created via the current Cloud Console
+   flow) hangs indefinitely on that auth method no matter how the console
+   restrictions are set. First misdiagnosed as a console API-key
+   restriction (`GET /v1beta/models` 200s in ~0.6s, `POST
+   .../generateContent` hangs with zero bytes — exactly what a
+   referrer-restricted key looks like). Fix: `x-goog-api-key` header
+   instead of the query param.
+2. **Model overload (fixed 2026-08-30).** After (1), the identical
+   symptom kept recurring — this time it was `gemini-flash-latest`
+   itself, genuinely and commonly overloaded (clean, fast `503
+   UNAVAILABLE` responses, live, repeatedly, across **two separate
+   Google accounts' keys**), not the key or its auth. `gemini-flash-
+   lite-latest` answered instantly and correctly on both of the same
+   keys, including full native function-calling round trips. Fix:
+   `MODEL_FALLBACK_CHAIN` tries `gemini-flash-lite-latest` first, and a
+   `(model, key)` fallback loop (`GEMINI_API_KEY_1`..`_4`, up to 4 keys)
+   cycles through every combination — models outer, keys inner — before
+   giving up.
+
+Verified live end to end: the actual `GeminiSummaryProvider.generate()`
+class, unmodified logic, called with real keys and returned a real model
+response, and a full function-calling round trip (tool call → tool
+result → grounded final answer) succeeded on the same reliable model.
 
 > **Fix, already applied:** `backend/app/providers/ai/gemini_summary.py`
 > now sends the key via `headers={"x-goog-api-key": ...}` instead of

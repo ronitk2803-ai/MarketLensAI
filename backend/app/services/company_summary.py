@@ -205,8 +205,8 @@ def generate_summary(db: Session, asset: Asset, *, force: bool = False) -> Compa
         return existing
 
     settings = get_settings()
-    if not settings.gemini_api_key:
-        raise ProviderError("gemini_summary", "GEMINI_API_KEY not configured")
+    if not settings.gemini_api_keys:
+        raise ProviderError("gemini_summary", "GEMINI_API_KEY_1 not configured")
 
     # A provider that's down stays down for a while, and each failed call
     # costs the full retry budget. Without this, every click on a broken
@@ -222,7 +222,7 @@ def generate_summary(db: Session, asset: Asset, *, force: bool = False) -> Compa
     prompt = _build_prompt(asset, ratios, news, inputs, latest_close)
     started_at = time.monotonic()
     try:
-        text = GeminiSummaryProvider(settings.gemini_api_key).generate(prompt)
+        text = GeminiSummaryProvider(settings.gemini_api_keys).generate(prompt)
     except ProviderError:
         # Logged before re-raising, so a dead provider is visible in
         # provider_fetch_log (Build_plan.md §X.5's whole purpose) instead of

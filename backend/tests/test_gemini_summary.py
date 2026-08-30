@@ -1,9 +1,9 @@
-"""Unit tests for GeminiSummaryProvider's retry behavior.
+"""Unit tests for GeminiSummaryProvider's (model, key) fallback loop.
 
-The retry loop has two failure shapes: an HTTP error status (5xx) and a
-network-level exception (timeout, connection reset) raised by httpx itself
-before any response exists. Both are marked `retryable=True`, so both need
-to actually retry rather than one of them silently bypassing the loop.
+Two independent axes of fallback, verified separately: a different model
+clears a model-overload failure (503/network error), and a different key
+clears a key-specific failure (429). Models are the outer loop and keys
+the inner one — see the module docstring on gemini_summary.py for why.
 """
 
 import httpx
@@ -28,108 +28,180 @@ def test_generate_returns_stripped_text_on_success() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return _ok_response()
 
-    provider = GeminiSummaryProvider("key", client=_client(handler))
+    provider = GeminiSummaryProvider(["key"], client=_client(handler))
     assert provider.generate("prompt") == "a summary"
 
 
-def test_generate_retries_after_a_network_level_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression test: a read timeout (or any httpx.HTTPError raised before
-    a response exists) used to `raise` straight out of the retry loop on
-    the very first attempt, even though it's marked retryable=True — so it
-    never got the same second chance a 503 does. Verified live 2026-08-25:
-    a single slow/overloaded-model request hung past the client's 30s
-    timeout and failed the whole summary with no retry."""
-    monkeypatch.setattr("app.providers.ai.gemini_summary.time.sleep", lambda _seconds: None)
-    calls = {"n": 0}
+def test_constructor_rejects_an_empty_key_list() -> None:
+    with pytest.raises(ValueError):
+        GeminiSummaryProvider([])
+
+
+def test_generate_falls_back_to_the_next_model_on_a_network_error() -> None:
+    """A network-level failure (timeout, connection reset) on the first
+    model in the chain moves to the second rather than retrying the same
+    (model, key) combination — verified live 2026-08-30: a genuinely
+    overloaded model fails identically on a second identical request."""
+    seen_models = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls["n"] += 1
-        if calls["n"] == 1:
+        model = str(request.url).split("/models/")[1].split(":")[0]
+        seen_models.append(model)
+        if len(seen_models) == 1:
             raise httpx.ReadTimeout("The read operation timed out", request=request)
         return _ok_response()
 
-    provider = GeminiSummaryProvider("key", client=_client(handler))
+    provider = GeminiSummaryProvider(
+        ["key"], models=["model-a", "model-b"], client=_client(handler)
+    )
     assert provider.generate("prompt") == "a summary"
-    assert calls["n"] == 2
+    assert seen_models == ["model-a", "model-b"]
 
 
-def test_generate_retries_on_5xx_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.providers.ai.gemini_summary.time.sleep", lambda _seconds: None)
-    calls = {"n": 0}
+def test_generate_falls_back_to_the_next_model_on_5xx() -> None:
+    seen_models = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return httpx.Response(503, text="overloaded")
+        model = str(request.url).split("/models/")[1].split(":")[0]
+        seen_models.append(model)
+        if len(seen_models) == 1:
+            return httpx.Response(503, json={"error": {"message": "overloaded"}})
         return _ok_response()
 
-    provider = GeminiSummaryProvider("key", client=_client(handler))
+    provider = GeminiSummaryProvider(
+        ["key"], models=["model-a", "model-b"], client=_client(handler)
+    )
     assert provider.generate("prompt") == "a summary"
-    assert calls["n"] == 2
+    assert seen_models == ["model-a", "model-b"]
 
 
-def test_generate_raises_after_exhausting_retries_on_repeated_network_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("app.providers.ai.gemini_summary.time.sleep", lambda _seconds: None)
+def test_generate_falls_back_to_a_different_key_on_429() -> None:
+    """A 429 no longer raises immediately (the old single-key behavior) —
+    it's exactly the case a second key in the pool exists for."""
+    seen_keys = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_keys.append(request.headers["x-goog-api-key"])
+        if len(seen_keys) == 1:
+            return httpx.Response(429, text="rate limited")
+        return _ok_response()
+
+    provider = GeminiSummaryProvider(["key-1", "key-2"], client=_client(handler))
+    assert provider.generate("prompt") == "a summary"
+    assert seen_keys == ["key-1", "key-2"]
+
+
+def test_generate_tries_models_outer_keys_inner() -> None:
+    """Exhausts every key on the first model before moving to the second
+    model — a model-overload failure is more likely to repeat across keys
+    (same overloaded backend) than a key failure is to repeat across
+    models, so this order wastes fewer combinations on average."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = str(request.url).split("/models/")[1].split(":")[0]
+        key = request.headers["x-goog-api-key"]
+        seen.append((model, key))
+        return httpx.Response(503, json={"error": {"message": "overloaded"}})
+
+    provider = GeminiSummaryProvider(
+        ["key-1", "key-2"], models=["model-a", "model-b"], client=_client(handler)
+    )
+    with pytest.raises(ProviderError):
+        provider.generate("prompt")
+
+    assert seen == [
+        ("model-a", "key-1"),
+        ("model-a", "key-2"),
+        ("model-b", "key-1"),
+        ("model-b", "key-2"),
+    ]
+
+
+def test_generate_raises_after_exhausting_every_combination() -> None:
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         raise httpx.ReadTimeout("still timing out", request=request)
 
-    provider = GeminiSummaryProvider("key", client=_client(handler))
+    provider = GeminiSummaryProvider(
+        ["key-1", "key-2"], models=["model-a", "model-b"], client=_client(handler)
+    )
     with pytest.raises(ProviderError, match="request failed"):
         provider.generate("prompt")
-    assert calls["n"] == 3  # _MAX_ATTEMPTS, not 1
+    assert calls["n"] == 4  # 2 models x 2 keys, none skipped
 
 
 def test_generate_raises_when_response_has_no_candidates() -> None:
+    """A safety-filtered empty response isn't something any other (model,
+    key) combination would answer differently, so this raises immediately
+    rather than burning through the rest of the chain."""
+    calls = {"n": 0}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
         return httpx.Response(200, json={"candidates": []})
 
-    provider = GeminiSummaryProvider("key", client=_client(handler))
+    provider = GeminiSummaryProvider(["key-1", "key-2"], client=_client(handler))
     with pytest.raises(ProviderError, match="no summary in response"):
         provider.generate("prompt")
+    assert calls["n"] == 1
 
 
-def test_generate_stops_retrying_once_the_total_deadline_is_spent(
+def test_generate_always_makes_at_least_one_attempt_even_over_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The attempt count alone bounds nothing: 3 attempts at a 30s timeout
-    plus two 2s sleeps is ~94s of a threadpool worker per click, which is
-    exactly what a dead provider cost before. Retries now have to fit a
-    total budget."""
+    """Regression guard: the deadline check must never suppress the very
+    first attempt, or last_error stays None and the internal `assert`
+    raises a bare AssertionError instead of a real ProviderError."""
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         raise httpx.ReadTimeout("The read operation timed out", request=request)
 
-    # A clock that jumps past the whole budget the moment the first attempt
-    # fails, so the second attempt is never made.
+    # Clock already past the deadline before the very first attempt.
     ticks = iter([0.0, gemini_summary._TOTAL_DEADLINE_SECONDS + 1])
-    monkeypatch.setattr(
-        gemini_summary.time, "monotonic", lambda: next(ticks, 10_000.0)
-    )
-    monkeypatch.setattr(gemini_summary.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gemini_summary.time, "monotonic", lambda: next(ticks, 10_000.0))
 
-    provider = GeminiSummaryProvider("key", client=_client(handler))
+    provider = GeminiSummaryProvider(["key-1", "key-2"], client=_client(handler))
     with pytest.raises(ProviderError, match="request failed"):
         provider.generate("prompt")
+    assert calls["n"] == 1  # the guaranteed first attempt, then budget stops the rest
 
-    assert calls["n"] == 1  # budget spent, so no second attempt
+
+def test_generate_stops_once_the_total_deadline_is_spent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ReadTimeout("The read operation timed out", request=request)
+
+    # First monotonic() call sets the deadline; the second (checked before
+    # combination 2) has already jumped past it.
+    ticks = iter([0.0, 0.0, gemini_summary._TOTAL_DEADLINE_SECONDS + 1])
+    monkeypatch.setattr(gemini_summary.time, "monotonic", lambda: next(ticks, 10_000.0))
+
+    provider = GeminiSummaryProvider(
+        ["key-1", "key-2"], models=["model-a"], client=_client(handler)
+    )
+    with pytest.raises(ProviderError, match="request failed"):
+        provider.generate("prompt")
+    assert calls["n"] == 1  # budget spent before combination 2
 
 
-def test_an_empty_bodied_4xx_is_reported_as_a_key_authorization_problem() -> None:
-    """The live symptom of a restricted key: Google answers generateContent
-    with a 4xx and no body at all, on a model its own models.list says
-    supports generateContent. A bare status code gives nobody anything to
-    act on."""
+def test_an_empty_bodied_4xx_names_the_header_auth_fix() -> None:
+    """The live signature of Bug 1 (see module docstring): Google answers
+    generateContent with a 4xx and no body at all, on a model its own
+    models.list says supports generateContent. A bare status code gives
+    nobody anything to act on."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, content=b"")
 
-    provider = GeminiSummaryProvider("key", client=_client(handler))
-    with pytest.raises(ProviderError, match="not authorized to generate"):
+    provider = GeminiSummaryProvider(["key"], client=_client(handler))
+    with pytest.raises(ProviderError, match="header auth"):
         provider.generate("prompt")
