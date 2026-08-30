@@ -31,6 +31,7 @@ export async function AppHeader() {
           <NavLink href="/opportunities">Screener</NavLink>
           <NavLink href="/portfolio">Portfolio</NavLink>
           <NavLink href="/theses">Theses</NavLink>
+          <NavLink href="/research">Research</NavLink>
         </nav>
 
         <ThemeToggle />

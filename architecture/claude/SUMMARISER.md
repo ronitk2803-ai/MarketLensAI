@@ -4,14 +4,16 @@
 > pending, and how to get it running on your machine. Codename `mlai`; the
 > product name in the UI is **MarketLens AI**. Nothing is hard-coded to a brand.
 >
-> **Status as of 2026-08-29:** P0 and P1 complete. P2 is 4 of 7 numbered steps
-> done, plus peer-percentile normalization (§X.4) and a general rate limiter,
-> both also done. Auth has been extended beyond the original P1 scope with
-> email verification, password reset and Google sign-in (§8.2 for the keys
+> **Status as of 2026-08-30:** P0 and P1 complete. P2 is 5 of 7 numbered steps
+> done — the NL research assistant (step 25, §X.8) shipped this session —
+> plus peer-percentile normalization (§X.4) and a general rate limiter, both
+> also done. Auth has been extended beyond the original P1 scope with email
+> verification, password reset and Google sign-in (§8.2 for the keys
 > needed). The corporate-actions data gap (§9.1, the highest-impact known
-> data bug) is fixed, and so is the Gemini auth bug (§8.2) — the AI company
-> summary is genuinely live now, not just code-complete. The app runs
-> end-to-end in containers on a developer machine against a live
+> data bug) is fixed, and so are both Gemini bugs (§8.2) — the AI company
+> summary and the research assistant are genuinely live now, not just
+> code-complete. The app runs end-to-end in containers on a developer
+> machine against a live
 > 500-company database with 5 years of prices. **It is not deployed to a
 > public server yet** — see §8.
 
@@ -100,12 +102,12 @@ The API never imports providers or DB models directly; engines never do IO.
 | 22 | Advanced combinable screener | ✅ |
 | 23 | Full industry scoring profiles | ✅ (see §9.4 on why only 2 profiles exist) |
 | 24 | Intelligent alerts (incl. thesis triggers) | ✅ |
-| 25 | NL research assistant | ❌ Not started — the Gemini blocker is gone (§8.2), but this step has no code yet, only the design/tool surface |
+| 25 | NL research assistant | ✅ 2026-08-30 — see `Build_plan.md` §X.8 |
 | 26 | Score backtesting | ❌ Not started |
 | 27 | Upstox intraday / WebSocket | ❌ Not started |
 | — | Peer-percentile normalization (§X.4) | ✅ 2026-08-29 |
 
-### 4.2 API surface (39 endpoints)
+### 4.2 API surface (40 endpoints)
 
 **Public, provenance-enveloped:**
 `GET /health` · `/assets/search` · `/quotes` · `/companies/{symbol}` ·
@@ -120,7 +122,7 @@ The API never imports providers or DB models directly; engines never do IO.
 `GET|POST|DELETE /watchlist` · `GET|POST|PUT|DELETE /theses` ·
 `GET|POST|PUT|DELETE /portfolio` + `POST /portfolio/import` ·
 `GET /alerts` + `POST /alerts/read` · `POST /screener/run` ·
-`POST /companies/{symbol}/ai-summary`
+`POST /companies/{symbol}/ai-summary` · `POST /assistant/ask`
 
 **Admin (gated by `X-Admin-Token`):** `POST /admin/upstox/token` · `GET /admin/metrics`
 
@@ -144,10 +146,12 @@ The API never imports providers or DB models directly; engines never do IO.
 
 `upstox` (prices + instruments) · `nse_bhavcopy` (auth-free EOD spine +
 delivery %) · `nse_indices` (Nifty 500 constituents) · `nse_sector_pe`
-(official sector P/E) · `yfinance_quotes` (live-ish quotes) ·
-`yfinance_fundamentals` · `yfinance_actions` (corporate actions) ·
-`google_news` (RSS) · `gemini_summary` (LLM) · `upstox_token_manager` ·
-`resend` (transactional email) · `google_oauth` (user sign-in).
+(official sector P/E) · `nse_actions` (corporate actions, primary since
+2026-08-29) · `yfinance_quotes` (live-ish quotes) · `yfinance_fundamentals` ·
+`yfinance_actions` (corporate actions fallback) · `google_news` (RSS) ·
+`gemini_summary` (LLM, one-shot) · `gemini_chat` (LLM, tool-calling) ·
+`upstox_token_manager` · `resend` (transactional email) ·
+`google_oauth` (user sign-in).
 
 Every call is (or should be) recorded to `provider_fetch_log` for health
 monitoring — this is what makes a dead provider visible.
@@ -169,7 +173,7 @@ so model/migration drift fails in CI rather than on deploy.
 **Pages:** `/` (market overview) · `/company/[symbol]` · `/opportunities` ·
 `/verify-email` · `/forgot-password` ·
 `/opportunities/advanced` · `/portfolio` · `/theses` `/theses/new` `/theses/[id]` ·
-`/alerts` · `/login` · `/register` · `/upstox-callback`
+`/alerts` · `/login` · `/register` · `/upstox-callback` · `/research`
 
 **28 domain components**, 5 terminal primitives (`Panel`, `Delta`, `Stat`,
 `RangeBar`, `Sparkline`), 15 BFF route handlers.
@@ -560,11 +564,10 @@ disagree.
 
 ## 10. Suggested next steps
 
-1. ~~Fix the Gemini key~~ — **done 2026-08-29**, see §8.2. Turned out to be
-   a code fix (auth header, not query param), not a console change. Step
-   19 (AI company summary) is now genuinely live; step 25 (NL research
-   assistant) is unblocked but still needs its own design/build pass — it
-   has no implementation yet, just the P2 spec.
+1. ~~Fix the Gemini key~~ — **done, two bugs, both 2026-08-30**, see §8.2.
+   Auth header not query param, then a genuinely overloaded model, not a
+   console change either time. Step 19 (AI company summary) is genuinely
+   live; step 25 (NL research assistant) is **built**, see §X.8.
 2. ~~Fix corporate actions~~ — **done 2026-08-29**, see §9.1. Still needs
    `python -m app.jobs.backfill_corporate_actions` run once against the
    production database once it exists/is reachable.

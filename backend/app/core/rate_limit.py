@@ -149,6 +149,12 @@ _LIMITERS: dict[str, TokenBucketLimiter] = {
     "screener_run": TokenBucketLimiter(capacity=3, refill_per_second=3 / 3600),
     "opportunities": TokenBucketLimiter(capacity=20, refill_per_second=20 / 60),
     "ai_summary": TokenBucketLimiter(capacity=5, refill_per_second=5 / 86400),
+    # Tighter than ai_summary's per-day cap looks, not looser: one question
+    # here can be several Gemini calls (research_assistant.py's tool-calling
+    # loop, up to MAX_TOOL_CALLS turns, each with its own model/key fallback
+    # sweep), so the actual generation cost per request is materially
+    # higher than one ai-summary click.
+    "nl_assistant": TokenBucketLimiter(capacity=10, refill_per_second=10 / 86400),
     "quotes": TokenBucketLimiter(capacity=30, refill_per_second=30 / 60),
     "auth_register": TokenBucketLimiter(capacity=5, refill_per_second=5 / 3600),
     "auth_login": TokenBucketLimiter(capacity=10, refill_per_second=10 / 60),

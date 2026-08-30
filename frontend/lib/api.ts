@@ -586,6 +586,31 @@ export function generateAiSummary(accessToken: string, symbol: string) {
   }).then((e) => e.data);
 }
 
+export interface AssistantAnswer {
+  answer: string;
+  /** Which tools the model actually called to ground this answer — shown
+   * so a reader can tell "this came from real data" from "this is a
+   * refusal/clarifying question", not proof of anything beyond that. */
+  tools_used: string[];
+}
+
+/** Bare JSON, not the {data, meta} envelope — a generated answer to this
+ * user's own question, not provenance-tagged market data (same reasoning
+ * as watchlist add/remove above). Rate-limited and auth-gated on the
+ * backend (app/api/v1/assistant.py) — one question can be several Gemini
+ * calls, not one. */
+export function askResearchAssistant(accessToken: string, question: string) {
+  return apiFetchRaw<AssistantAnswer>("/assistant/ask", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ question }),
+    cache: "no-store",
+  });
+}
+
 export function getLiveQuotes(symbols: string[]) {
   const params = new URLSearchParams({ symbols: symbols.join(",") });
   return apiFetch<LiveQuote[]>(`/quotes?${params.toString()}`, { cache: "no-store" });
