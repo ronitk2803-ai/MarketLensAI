@@ -37,7 +37,15 @@
 
 ## Remaining: Steps 5-9
 
-- [~] **Step 5 — DNS + wiring. IN PROGRESS, BLOCKED IN GODADDY.**
+- [x] **Step 5 — DNS DONE.** GoDaddy hold lifted (WHOIS verified), Website Builder draft
+      deleted, `A @ 216.198.79.1` set. https://marketlensai.in is LIVE with valid TLS,
+      market overview + company pages rendering. Still to wire (quick):
+      - Render `CORS_ORIGINS` = `https://marketlensai.in` — confirm it's set
+      - Google Cloud Console -> OAuth client -> add redirect URI
+        `https://marketlensai.in/api/auth/google/callback`
+      - (`noreply@marketlensai.in` mailbox created in GoDaddy for Step 6)
+
+<details><summary>Step 5 history (blocked, now resolved)</summary>
       - Vercel: `marketlensai.in` added, apex-only (no www — a www entry was deleted
         during setup; re-add later if wanted), connected to Production, shows
         "Invalid Configuration" pending DNS. `market-lens-ai-phi.vercel.app` is valid.
@@ -59,6 +67,9 @@
         (confirm); add `https://marketlensai.in/api/auth/google/callback` to the Google
         OAuth client in Google Cloud Console and confirm Render's `GOOGLE_REDIRECT_URI`
         matches byte-for-byte.
+
+</details>
+
 - [ ] **Step 6 — Resend domain.** resend.com/domains → add marketlensai.in → paste
       MX/SPF/DKIM into GoDaddy → set Render `RESEND_FROM_EMAIL=MarketLens AI <noreply@marketlensai.in>`.
       Until done, only the Resend account owner gets verification/reset email.
