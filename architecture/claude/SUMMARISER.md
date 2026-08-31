@@ -22,7 +22,8 @@
 > free) + Vercel (frontend, Hobby) + Resend (email, domain verified) + a
 > cron-job.org keep-alive + a GitHub Actions nightly ingestion job. Google
 > sign-in **was broken on the live site and is fixed pending deploy** — see
-> §8.4. **The hosted DB was freshly seeded** (500 companies, ~150k
+> §8.4, though §8.6's OOM is the likelier root cause of it. The backend was
+> **OOM-killed twice** on the 512 MB free instance; fixed 2026-09-01 (§8.6). **The hosted DB was freshly seeded** (500 companies, ~150k
 > price bars over 450 days, corporate actions, 500 scores). See §8.1 for the
 > live URLs and §11.6 for the deployment story; the granular blow-by-blow is
 > in `DEPLOY_STATUS.md`.
@@ -591,6 +592,60 @@ name, falling back to the email when there isn't one.
   forbids. So the email fallback is the common case, not an edge case. If
   names are wanted for everyone, the honest fix is a name field on the
   register form.
+
+### 8.6 Render OOM-killed the backend (exit 137) — fixed 2026-09-01
+
+Render alerted twice with `Exited with status 137` — SIGKILL, which on a
+512 MB free instance means the OOM killer.
+
+**Cause.** `load_universe_bars_with_ids` hydrated a full `PriceOHLCV` +
+`Asset` ORM instance per price bar. Measured on the dev universe:
+**3.45 KB/bar** as ORM instances vs **0.71 KB** as plain column tuples —
+each instance carries its own `__dict__`, `Decimal` objects for five
+`Numeric` columns, and a Session identity-map entry that keeps the whole
+result alive. `frontend/app/page.tsx` then fires **four screens
+concurrently** (`Promise.all`), and each loads the universe independently:
+
+| Homepage board | Lookback | ~bars (500 assets) | Before | After §8.6 |
+|---|---|---|---|---|
+| `down_5d` | 18d | 6k | 20 MB | 4 MB |
+| `unusual_volume` | 41d | 14k | 47 MB | 10 MB |
+| `down_30d` | 55d | 19k | 62 MB | 13 MB |
+| `below_dma200` | 306d | 103k | 347 MB | 71 MB |
+| **concurrent total** | | | **477 MB** | **98 MB** |
+
+477 MB of transient allocation plus process overhead against a 512 MB cap
+— one homepage render could exhaust the instance.
+
+**Fixes (two commits, in this order):**
+- `ff7ef33` — `select()` the 9 columns `Bar` needs instead of whole
+  entities; stream with `yield_per` instead of buffering; drain each
+  asset's raw list as it is adjusted so the raw and adjusted universes are
+  never both resident. **3.45 -> 0.71 KB/bar, 4.8x.** Verified
+  byte-identical output against the old implementation across all 260
+  assets / 24,295 bars of the dev universe. Adjustment is untouched.
+- `7d4a5cd` — homepage boards swap `below_dma200` (306d) for
+  `below_dma50` (84d), taking the four to ~46 MB. Margin, not a second
+  fix: at ~98 MB there was no room for a concurrent second visitor.
+  `below_dma200` is still reachable from `/opportunities`.
+
+**This is probably the real cause of §8.4's Google failure too.** A
+visitor loads the homepage -> the box is OOM-killed -> they click
+"Continue with Google" -> the callback hits a dead or restarting backend
+-> `error=google`. It fits every probe in §8.4: the OAuth config checked
+out because nothing was ever wrong with it. §8.4's `maxDuration` fix is
+still correct and worth having, but it would not have fixed this — and a
+cold start and an OOM restart both surface as `google_unreachable`, so
+that error code does not tell them apart. The Render log does.
+
+- [ ] Not yet confirmed against the Render logs — the OOM line itself was
+      never read, so the diagnosis is measurement plus arithmetic, not the
+      platform's own account of the kill.
+
+**Watch for this pattern elsewhere.** Any path that loads ORM rows per bar
+over the universe has the same profile. `alerts.py` uses `WEEK52_BARS`
+(252 -> 384 days, wider than anything on the homepage) but is scoped to
+watchlisted assets; `screener.py` goes through the same fixed loader.
 
 ---
 
