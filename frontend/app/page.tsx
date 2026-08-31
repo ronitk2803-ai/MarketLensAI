@@ -17,11 +17,28 @@ export const dynamic = "force-dynamic";
 // default 10s Vercel function budget.
 export const maxDuration = 60;
 
+// These four run CONCURRENTLY (Promise.all below), and each one makes the
+// backend load and corporate-action-adjust the whole universe over that
+// screen's own lookback — so the cost of this list is dominated by its
+// longest window. below_dma200 needs 200 sessions = 306 calendar days,
+// ~103k bars on the hosted universe; below_dma50 needs 84 days, ~28k.
+//
+// Headroom, not a fix: the loader was rewritten to stop hydrating an ORM
+// row per bar (~477MB -> ~98MB for these four on a 512MB Render instance,
+// after it was OOM-killed with exit 137 — SUMMARISER.md §8.6). This
+// swap buys margin on top of that, taking the four to ~46MB, because the
+// homepage is the one page every visitor loads and the free instance has
+// no room for a second concurrent visitor at ~98MB.
+//
+// So treat this list as memory-bounded, not just editorial: adding a
+// long-lookback screen here (below_dma100/200, down_60d/90d) spends that
+// margin. below_dma200 is still reachable from /opportunities, where it
+// is one request at a time rather than one of four.
 const BOARDS = [
   { screen: "down_5d", title: "Sharpest 5-day declines" },
   { screen: "down_30d", title: "Sharpest 30-day declines" },
   { screen: "unusual_volume", title: "Unusual volume" },
-  { screen: "below_dma200", title: "Below 200-day average" },
+  { screen: "below_dma50", title: "Below 50-day average" },
 ];
 
 async function safeScreen(
