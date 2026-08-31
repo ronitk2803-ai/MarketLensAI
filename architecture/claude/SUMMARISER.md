@@ -681,6 +681,51 @@ headroom costs nothing on the database side.
 - [ ] Not yet re-verified live — no repeat burst has been observed, but
       the fix hasn't been deliberately load-tested either.
 
+### 8.8 `force-dynamic` was silently defeating every screen-data cache — fixed 2026-09-01
+
+Neon emailed: 87.8% (4.4 GB) of the 5 GB *monthly* network-transfer
+allowance used, on a project **~12 hours old** (Neon's own dashboard:
+"Usage since Aug 31, 2026," created 2026-08-31). At that rate the free
+tier would be exhausted in roughly a day.
+
+`/` and `/opportunities` fetch shared, public market data via
+`getOpportunities`/`getOpportunityIndustries`, each with its own
+`next: { revalidate: N }` (900s / 3600s) — the developer's intent was
+clearly to cache these across visitors. But both pages also set
+`export const dynamic = "force-dynamic"`, and per Next's own docs that
+implicitly sets `fetchCache = "force-no-store"`, which **overrides even an
+individual fetch's own explicit `revalidate` or `force-cache`**. The
+`/opportunities` comment said the fetch-level revalidate "already bounds
+staleness" — it never did; force-dynamic silently defeated it completely.
+Every single homepage or opportunities-page view was re-fetching and
+re-transferring the full result set from the backend/Neon, uncached,
+forever. The homepage alone opens 4 of these per view.
+
+**Fix:** `export const revalidate = 0` instead of
+`dynamic = "force-dynamic"`, on `/`, `/opportunities`, and
+`/opportunities/advanced`. Both force per-request dynamic rendering
+(needed because these are static routes Next would otherwise try to
+prerender at build time, when the backend is unreachable) — but
+`revalidate = 0` explicitly leaves a fetch's own positive `revalidate` in
+place instead of stomping it. Verified two ways: built locally against a
+genuinely unreachable backend (matching Vercel's actual build
+environment) both before and after the change — `/`, `/opportunities`,
+`/opportunities/advanced` all still come out `ƒ Dynamic`, zero build
+errors, in both versions; and read the exact fetchCache override wording
+in Next 16's own bundled docs (`node_modules/next/dist/docs`) rather than
+trusting training data, per this repo's own AGENTS.md warning that this
+Next version has breaking changes.
+
+`company/[symbol]/page.tsx` never had this bug — it's a `[symbol]`
+dynamic-segment route, so Next never attempts to prerender it at build
+time in the first place, and its fetches' revalidate values were already
+being honored.
+
+- [ ] Not yet re-verified against a real reduction in Neon's network
+      transfer graph — Neon's console has no per-query or hourly egress
+      breakdown on the free plan, so confirmation is "the total stops
+      climbing at the old rate," which needs a day or two of data to see.
+
 ---
 
 ## 9. Pending — known data & product gaps
