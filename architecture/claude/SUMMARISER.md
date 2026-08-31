@@ -21,7 +21,8 @@
 > stack is hosted on free tiers — Neon Postgres (Singapore) + Render (backend,
 > free) + Vercel (frontend, Hobby) + Resend (email, domain verified) + a
 > cron-job.org keep-alive + a GitHub Actions nightly ingestion job. Google
-> sign-in works. **The hosted DB was freshly seeded** (500 companies, ~150k
+> sign-in **was broken on the live site and is fixed pending deploy** — see
+> §8.4. **The hosted DB was freshly seeded** (500 companies, ~150k
 > price bars over 450 days, corporate actions, 500 scores). See §8.1 for the
 > live URLs and §11.6 for the deployment story; the granular blow-by-blow is
 > in `DEPLOY_STATUS.md`.
@@ -33,11 +34,16 @@
 > (`git push origin main && git push mine main`); Render/Vercel auto-deploy
 > from `mine`.
 >
-> **Left to polish (not blockers):** finish the §7 smoke test on the live
-> site; the Render free dyno cold-starts (~20-45s) so the keep-alive ping
-> should be every 5 min not 10, and a Vercel 60s function timeout was added
-> to absorb it — moving Render to the ~$7/mo Starter plan removes both
-> problems and lets `ENABLE_SCHEDULER=true` replace the GitHub Actions job.
+> **Post-deploy cleanup done 2026-08-31:** the §7 smoke test has been run
+> against the live site, the cron-job.org keep-alive ping is now every 5 min
+> (was 10 — the free dyno went cold between pings), and the Neon password
+> has been reset.
+>
+> **Left to polish (not blockers):** the Render free dyno still cold-starts
+> (~20-45s) on the first hit after a genuinely idle stretch, which the 5-min
+> ping and a Vercel 60s function timeout absorb — moving Render to the
+> ~$7/mo Starter plan removes both problems and lets `ENABLE_SCHEDULER=true`
+> replace the GitHub Actions job.
 >
 > **New to this project? Read §11 first** — it is the "where we are right
 > now and what to do next" section written for exactly that.
@@ -369,18 +375,21 @@ Live at **<https://marketlensai.in>**. Full step log: `DEPLOY_STATUS.md`.
 | Frontend | Vercel Hobby, project `market-lens-ai`, team "MLAI", root dir `frontend` | env `API_BASE_URL=https://mlai-backend.onrender.com/api/v1`. `next.config.ts` skips `output:"standalone"` when `VERCEL=1`. Data-heavy pages set `maxDuration=60`. |
 | Backend | Render free, service `mlai-backend`, `https://mlai-backend.onrender.com` | Docker, Singapore, `ENABLE_SCHEDULER=false`. **Cold-starts ~20-45s** after idle. Blueprint from `render.yaml` but env vars were set by hand. |
 | Database | Neon free, Singapore, PG17 | pooled string works for both Alembic and runtime. Seeded: 500 companies, ~150k bars (450d), corp actions, 500 scores. |
-| Keep-alive | cron-job.org hits `/api/v1/health` | currently every 10 min — **change to 5 min** (dyno goes cold between 10-min pings). |
+| Keep-alive | cron-job.org hits `/api/v1/health` | **every 5 min** since 2026-08-31 (was 10 — the dyno went cold between 10-min pings). |
 | Nightly ingestion | GitHub Actions `nightly-ingestion.yml` on `MarketLensAI` | secrets `DATABASE_URL` + `JWT_SECRET`; runs 20:00 IST. First manual run was green. |
 | Email | Resend, `marketlensai.in` verified | sender `MarketLens AI <noreply@marketlensai.in>` (a real GoDaddy mailbox). |
-| Google OAuth | one client, redirect `https://marketlensai.in/api/auth/google/callback` | sign-in verified working live. |
+| Google OAuth | one client, redirect `https://marketlensai.in/api/auth/google/callback` | config verified correct 2026-09-01 (Google accepts the client id/secret/redirect URI). Sign-in was nevertheless **failing live** — §8.4. |
 | DNS | GoDaddy: `A @ 216.198.79.1` (Vercel). `CNAME www` still points to apex. | domain had a WHOIS "status hold" that had to be cleared first; a GoDaddy Website Builder draft site had to be deleted to free the `A` record. |
 
-- [ ] Still to do: finish the §7 smoke test on the live site; move the
-      keep-alive ping to 5 min; consider Render Starter (~$7/mo) to kill
-      cold-starts and let `ENABLE_SCHEDULER=true` replace the Actions job;
-      re-add `www.marketlensai.in` in Vercel if wanted; **reset the Neon
-      password if it hasn't been** (an early connection string was pasted in
-      chat — the dev says they rotated it).
+- [x] Done 2026-08-31: the §7 smoke test has been run against the live
+      site; the keep-alive ping moved from 10 min to **5 min**; the **Neon
+      password has been reset** (an early connection string had been pasted
+      in chat — anything holding the old string, i.e. Render's
+      `DATABASE_URL` and the GitHub Actions `DATABASE_URL` secret, must carry
+      the new one).
+- [ ] Still to do: consider Render Starter (~$7/mo) to kill cold-starts and
+      let `ENABLE_SCHEDULER=true` replace the Actions job; re-add
+      `www.marketlensai.in` in Vercel if wanted.
 
 Deploy configs `render.yaml`, `backend/fly.toml` (unused alternative) and
 `frontend/vercel.json` now exist in the repo.
@@ -518,6 +527,70 @@ for the audit above):
 | CORS with a disallowed `Origin` | no `access-control-allow-origin` reflected |
 | All frontend pages incl. `/research`, `/company/J%26KBANK` | 200 |
 | Secrets tracked in git / baked into the image | none — `.env`, `backend/.env`, `Secrets/` all gitignored; no key in any tracked file; no `.env` in the built image |
+
+### 8.4 Google sign-in failed live — fixed 2026-09-01 (not yet re-verified)
+
+Reported as `/login?error=google` on the live site when signing up with
+Google. **Every part of the OAuth configuration was verified correct**
+against production before touching any code, which is what makes the
+remaining explanation interesting:
+
+| Probe against production | Result |
+|---|---|
+| `/health` | 200 in 0.6s (warm) |
+| `/auth/providers` | `{"google": true}` |
+| authorize URL's `redirect_uri` | `https://marketlensai.in/api/auth/google/callback` — correct |
+| `POST /auth/google/callback` with a junk code | `502 [google_oauth] token exchange failed: 400 invalid_grant "Malformed auth code."` |
+| DB reads (`/assets/search`, `/opportunities/screens`) | 200 — so the Neon password reset did reach Render |
+
+The last row is the load-bearing one: `invalid_grant` means Google
+**accepted** the client id, client secret and redirect URI and rejected only
+the code. `invalid_client` would have meant a bad secret;
+`redirect_uri_mismatch` a bad URI. Neither appeared, so none of the usual
+OAuth suspects were involved.
+
+**The cause (strong hypothesis, not observed):** commit `c06b7d5` added
+`maxDuration = 60` to the three data-heavy *pages* but to **no route
+handler**. On Vercel Hobby a function defaults to ~10s, and
+`/api/auth/google/callback` blocks on a Render free dyno that cold-starts
+20-45s — so the function was killed mid-exchange. It could not be confirmed
+directly: a real sign-in can't be reproduced from a terminal, and the
+handler's `catch {}` wrote nothing down anywhere.
+
+**Fixes applied:**
+- `maxDuration = 60` on **all ten** `app/api/auth/*` route handlers. Google
+  was the reported one; login, register, verify-email and password-reset had
+  the identical latent bug and would fail the same way on a cold dyno.
+- The callback's bare `catch {}` — which collapsed a rejected grant, a 500
+  from account linking, and a timeout into one message with no record — now
+  logs the real reason and splits "backend never answered" (`google_
+  unreachable`, "wait a few seconds and try again") from "backend rejected
+  it" (`google`). **If it fails again, that log line names the cause**;
+  don't re-derive it from scratch.
+
+- [ ] **Not yet re-verified live.** The fix ships on deploy; a real browser
+      sign-in still has to be run against marketlensai.in to confirm it.
+
+### 8.5 Display name instead of email address (2026-09-01)
+
+The header showed the signed-in account's email. It now shows the person's
+name, falling back to the email when there isn't one.
+
+- `SCOPES` in `google_oauth.py` went from `openid email` to
+  `openid email profile`. **This reverses a decision the file documented**
+  (`profile` was refused as buying a name "we don't display" — no longer
+  true). `access_type=offline` is still refused. Consequence: existing
+  Google users get a **re-consent prompt**, because the scope set changed.
+- New nullable `app_user.display_name` (migration `7b1e4a92c5d0`), fed only
+  from Google's `name`. Existing Google accounts backfill on next sign-in;
+  a name already on file is never overwritten, so a future
+  "what should we call you" setting can't be silently reverted by a re-login.
+- **Password signups keep showing their email, by design.** The register
+  form doesn't ask for a name and deriving one from the local part of the
+  address (`ronit.k2803@…` -> "Ronit") is exactly the fabrication §7 rule 1
+  forbids. So the email fallback is the common case, not an edge case. If
+  names are wanted for everyone, the honest fix is a name field on the
+  register form.
 
 ---
 
@@ -699,6 +772,17 @@ Eleven commits, all on `main`, all pushed, working tree clean:
 
 ### 11.2 Things a fresh conversation will otherwise get wrong
 
+- **"Verified working live" in this doc is only as good as the check behind
+  it.** Google sign-in was recorded as verified on 2026-08-31 and was
+  actually broken (§8.4). The check that passed was a sign-in with an
+  already-linked account on a warm dyno; the path that failed was a new
+  signup on a cold one. When recording something as verified, record *which
+  path* was exercised — "Google sign-in works" hid a failing branch for a day.
+- **Vercel route handlers need `maxDuration` too, not just pages.** Anything
+  under `frontend/app/api/` that calls the backend blocks on a Render free
+  dyno that cold-starts 20-45s, against a ~10s platform default. All ten
+  auth handlers now set it; **a newly added route handler will not** unless
+  you remember to.
 - **The Gemini saga was TWO separate bugs**, and the first fix was real but
   insufficient. Both are documented at length in
   `app/providers/ai/gemini_summary.py`'s module docstring. If AI generation
@@ -827,12 +911,18 @@ build, the ai-summary test needing a Gemini-key stub in CI) is in
   fixes, `52ae0da` CI test fix, then the `maxDuration=60` frontend commit,
   plus several `DEPLOY_STATUS.md` progress commits.
 - **Verified working live on marketlensai.in:** market overview, company
-  pages (chart + score), Google sign-in. CI green, nightly ingestion green.
-- **Known rough edges** (none block use): Render free cold-starts 20-45s —
-  bump the cron-job.org ping to every 5 min (§8.1); if still sluggish, the
-  fix is Render Starter (~$7/mo). Finish the `Deployment.md` §7 smoke test
-  (register → verify email → watchlist write → screener → research
-  assistant). Consider re-adding `www.`.
+  pages (chart + score). CI green, nightly ingestion green. **Google
+  sign-in was recorded here as verified and was not** — it failed with
+  `/login?error=google` on 2026-09-01. See §8.4; the lesson is in §11.2.
+- **Post-deploy cleanup, done 2026-08-31:** the `Deployment.md` §7 smoke
+  test has been run against the live site (register → verify email →
+  watchlist write → screener → research assistant); the cron-job.org
+  keep-alive ping is now every 5 min, not 10; the Neon password has been
+  reset.
+- **Known rough edges** (none block use): the Render free dyno still
+  cold-starts 20-45s on the first hit after a genuinely idle stretch; if that
+  stays annoying the fix is Render Starter (~$7/mo). Consider re-adding
+  `www.`.
 - **Still genuinely pending** (pre-existing, not deploy work): the §8.3
   security audit; XBRL fundamentals (§9.2); score backtesting (step 26);
   Upstox intraday (step 27).
