@@ -23,7 +23,23 @@
 - [x] `python -m app.jobs.backfill_history --days 450` — 150,160 bars, 305 trading days
 - [x] `python -m app.jobs.backfill_corporate_actions` — 3,825 rows
 - [x] Bug found + fixed mid-seed: `ingest_corporate_actions` duplicate-row crash (commit `341f945`)
-- [ ] `python -m app.jobs.daily_ingestion` — **running now** (scores, ~20 min)
+- [x] `python -m app.jobs.daily_ingestion` — 500 scores, 0 errors; corp-action fix confirmed
+- [x] **Step 3 — backend live** at https://mlai-backend.onrender.com (Render free, Docker,
+      commit f20ed19). `/api/v1/health` + `/opportunities/screens` verified serving from Neon.
+
+## IMPORTANT: deploy repo changed
+
+Render (and Vercel) deploy from **`ronitk2803-ai/MarketLensAI`**, not
+`safiyat/ronrack` — the user's Render/GitHub account had no access to
+`safiyat/ronrack`. Local repo now has two remotes:
+`origin` = safiyat/ronrack, `mine` = ronitk2803-ai/MarketLensAI.
+**Push future changes to BOTH:** `git push origin main && git push mine main`
+(Render auto-deploys on push to `mine`).
+
+Render env vars were NOT prompted by the Blueprint — they were added by hand
+on the service's Environment tab (DATABASE_URL, CORS_ORIGINS, GEMINI_API_KEY_1/2,
+RESEND_API_KEY, GOOGLE_CLIENT_ID/SECRET, GOOGLE_REDIRECT_URI). JWT_SECRET/ENV/
+ENABLE_SCHEDULER/TRUST_FORWARDED_FOR came from the blueprint.
 
 The Neon connection string (with password) lives only on the developer's
 machine, exported as `DATABASE_URL` in the seeding terminal. It was pasted
