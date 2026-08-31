@@ -43,11 +43,16 @@
         "Invalid Configuration" pending DNS. `market-lens-ai-phi.vercel.app` is valid.
       - Vercel wants ONE record: `A` `@` -> **216.198.79.1** (new Vercel IP; legacy
         76.76.21.21 also works). Shown under the domain's "View DNS configuration".
-      - **BLOCKER:** GoDaddy won't let the `A @` record be edited/deleted — it's held by
-        a GoDaddy Website Builder **draft** site ("Market Lens AI", never published).
-        Fix: delete that draft site at websites.godaddy.com -> site -> Settings ->
-        Delete Site, then edit `A @` -> 216.198.79.1. (WHOIS verification was completed;
-        the yellow banner may lag a few hours but isn't the blocker.)
+      - **BLOCKER (escalated):** the domain is now on a GoDaddy **"status hold"** —
+        it won't resolve at all until lifted. Almost certainly ICANN registrant-email
+        verification not completed (pending -> hold). Fix: open the actual GoDaddy
+        verification email to ronit.k2803@gmail.com (check spam) and click its link;
+        the dashboard "Validate" button just resends it. If already verified and still
+        held, contact GoDaddy support. Until the hold lifts, DNS changes are pointless.
+      - Also still true once the hold lifts: the `A @` record is held by a GoDaddy
+        Website Builder DRAFT site ("Market Lens AI"). Delete it at
+        websites.godaddy.com -> site -> Settings -> Delete Site, then set
+        `A @` -> 216.198.79.1.
       - GoDaddy already has `CNAME www -> marketlensai.in.` (fine, leave it). Leave NS,
         SOA, `_dmarc` TXT, `_domainconnect` alone.
       - AFTER DNS is green: Render env `CORS_ORIGINS` is already `https://marketlensai.in`
