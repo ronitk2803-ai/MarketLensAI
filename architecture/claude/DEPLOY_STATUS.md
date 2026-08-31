@@ -24,8 +24,37 @@
 - [x] `python -m app.jobs.backfill_corporate_actions` — 3,825 rows
 - [x] Bug found + fixed mid-seed: `ingest_corporate_actions` duplicate-row crash (commit `341f945`)
 - [x] `python -m app.jobs.daily_ingestion` — 500 scores, 0 errors; corp-action fix confirmed
-- [x] **Step 3 — backend live** at https://mlai-backend.onrender.com (Render free, Docker,
-      commit f20ed19). `/api/v1/health` + `/opportunities/screens` verified serving from Neon.
+- [x] **Step 3 — backend live** at https://mlai-backend.onrender.com (Render free, Docker).
+      `/api/v1/health` + `/opportunities/screens` verified serving from Neon.
+- [x] **Step 4 — frontend live** at https://market-lens-ai-phi.vercel.app (Vercel Hobby,
+      team "MLAI", project `market-lens-ai`, root dir `frontend`, `API_BASE_URL` set).
+      Two build fixes were needed: `vercel.json` had a `regions` pin (Hobby rejects it,
+      commit 8693763) and `next.config.ts` `output: "standalone"` broke Vercel's build
+      (now conditional on `!process.env.VERCEL`, commit b705514).
+- [x] **Keep-alive**: cron-job.org pings `/api/v1/health` every 10 min so Render doesn't
+      sleep (its 50s cold start exceeds Vercel's 10s fetch timeout → "Couldn't load market
+      data"). Confirmed: site works when backend is warm.
+
+## Remaining: Steps 5-9
+
+- [ ] **Step 5 — DNS + wiring.** Vercel → Settings → Domains → add `marketlensai.in` +
+      `www`. GoDaddy DNS: delete parked `@` A/AAAA and default `CNAME www`; add
+      `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com` (use whatever Vercel's
+      Domains page says). Then: Render env `CORS_ORIGINS=https://marketlensai.in`
+      (currently already that value — confirm); add
+      `https://marketlensai.in/api/auth/google/callback` to the Google OAuth client in
+      Google Cloud Console AND confirm Render's `GOOGLE_REDIRECT_URI` matches byte-for-byte.
+- [ ] **Step 6 — Resend domain.** resend.com/domains → add marketlensai.in → paste
+      MX/SPF/DKIM into GoDaddy → set Render `RESEND_FROM_EMAIL=MarketLens AI <noreply@marketlensai.in>`.
+      Until done, only the Resend account owner gets verification/reset email.
+- [ ] **Step 7 — GitHub Actions nightly.** Repo Settings → Secrets and variables → Actions:
+      add `DATABASE_URL` (the +psycopg Neon string) and `JWT_SECRET` (any value). Then
+      Actions tab → "Nightly ingestion" → Run workflow once to confirm.
+      NOTE: the workflow file is on `mine/main` (ronitk2803-ai/MarketLensAI) — add the
+      secrets on THAT repo.
+- [ ] **Step 8 — smoke test** (Deployment.md §7).
+- [ ] **Step 9 — reset Neon password** (pasted in chat), update Render `DATABASE_URL` +
+      the GitHub `DATABASE_URL` secret. Then fold this file into SUMMARISER.md §11 and delete it.
 
 ## IMPORTANT: deploy repo changed
 
