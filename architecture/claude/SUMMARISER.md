@@ -4,18 +4,24 @@
 > pending, and how to get it running on your machine. Codename `mlai`; the
 > product name in the UI is **MarketLens AI**. Nothing is hard-coded to a brand.
 >
-> **Status as of 2026-08-30:** P0 and P1 complete. P2 is 5 of 7 numbered steps
-> done — the NL research assistant (step 25, §X.8) shipped this session —
-> plus peer-percentile normalization (§X.4) and a general rate limiter, both
-> also done. Auth has been extended beyond the original P1 scope with email
-> verification, password reset and Google sign-in (§8.2 for the keys
-> needed). The corporate-actions data gap (§9.1, the highest-impact known
-> data bug) is fixed, and so are both Gemini bugs (§8.2) — the AI company
-> summary and the research assistant are genuinely live now, not just
-> code-complete. The app runs end-to-end in containers on a developer
-> machine against a live
-> 500-company database with 5 years of prices. **It is not deployed to a
-> public server yet** — see §8.
+> **Status as of 2026-08-31:** P0 and P1 complete. **P2 is 5 of 7 numbered
+> steps done**, plus peer-percentile normalization (§X.4) and a general rate
+> limiter. Every feature in the build plan that can be built without a
+> third-party account is now built — the NL research assistant (step 25,
+> §X.8) was the last one. Auth is extended beyond the original P1 scope with
+> email verification, password reset and Google sign-in. The
+> corporate-actions data gap (§9.1, the highest-impact known data bug) is
+> fixed, and so are both Gemini bugs (§8.2) — the AI company summary and the
+> research assistant are genuinely live, verified end-to-end, not just
+> code-complete.
+>
+> **The one thing left is deployment.** The domain **marketlensai.in** is
+> purchased (GoDaddy). The app runs end-to-end in containers on the
+> developer's machine against a live 500-company database with 5 years of
+> prices, but **is not deployed to a public server yet** — see §8.1 and §11.
+>
+> **New to this project? Read §11 first** — it is the "where we are right
+> now and what to do next" section written for exactly that.
 
 ---
 
@@ -196,10 +202,15 @@ so model/migration drift fails in CI rather than on deploy.
 
 ### 4.8 Quality gates
 
-**607 test functions across 63 files.** CI (`.github/workflows/ci.yml`) runs
-on every push to `main` and every PR, with a real Postgres service container:
+**778 test functions across 76 files — 943 tests collected and passing**
+(the gap is parametrized cases). CI (`.github/workflows/ci.yml`) runs on every
+push to `main` and every PR, with a real Postgres service container:
 `ruff check .` → `mypy app` → `alembic upgrade head` → `pytest`.
 Frontend gates are `npm run lint`, `npx tsc --noEmit`, `npm run build`.
+
+**All gates verified green 2026-08-31**, immediately before this handover:
+`ruff` clean, `mypy app` clean across 109 source files, 943 tests passing in
+~2m19s, and the frontend `lint` / `tsc --noEmit` / `build` all clean.
 
 ---
 
@@ -432,9 +443,38 @@ RSS are all free and unauthenticated.
 - [ ] `/admin/*` is a shared-secret header, not real RBAC.
 - [ ] No error tracking (Sentry or equivalent) and no uptime monitoring.
 - [ ] No backup/restore policy for the hosted database.
-- [ ] SEBI positioning: the disclaimer copy exists in the UI footer, but the
-      research-analyst positioning decision has not been formally signed off
-      (`Build_plan.md` §V.6).
+- [ ] SEBI positioning: the disclaimer copy is now live across the whole app
+      (footer, every AI/scoring panel footnote, and transactional emails —
+      2026-08-29), but the research-analyst **positioning decision** itself
+      has not been formally signed off (`Build_plan.md` §V.6). That is a
+      business/legal judgment call, not a coding task.
+- [ ] **No full security audit has been completed.** One was launched
+      2026-08-31 (8 parallel reviewers: authn, authz, LLM/prompt-injection,
+      injection/validation, SSRF/secrets, DoS/rate-limit, frontend/BFF,
+      correctness) but **every agent aborted on a usage limit before
+      producing findings** — so it produced *no result at all*, neither a
+      clean bill of health nor a list of issues. **Do not read the absence
+      of findings as an absence of problems.** Re-run it before going
+      public; the highest-value targets are the newest code
+      (`research_assistant.py`'s tool dispatch and its 4 user-scoped tools,
+      `gemini_chat.py`, and the `/assistant/ask` surface).
+
+**What *was* verified live on 2026-08-31** (manual checks, not a substitute
+for the audit above):
+
+| Check | Result |
+|---|---|
+| Backend `/health` | 200 |
+| Public endpoints (screens, industries, search) | 200 |
+| `/watchlist`, `/portfolio`, `/theses`, `/alerts` unauthenticated | 401 |
+| `POST /assistant/ask` unauthenticated | 401 |
+| `POST /admin/upstox/token` without `X-Admin-Token` | 401 |
+| BFF `/api/assistant/ask` without session cookie | 401 |
+| Rate limiter on `/quotes` (cap 30/min) | 30×200 then 5×429 |
+| 429 response carries `Retry-After` **and** CORS headers | yes — proves middleware ordering is right |
+| CORS with a disallowed `Origin` | no `access-control-allow-origin` reflected |
+| All frontend pages incl. `/research`, `/company/J%26KBANK` | 200 |
+| Secrets tracked in git / baked into the image | none — `.env`, `backend/.env`, `Secrets/` all gitignored; no key in any tracked file; no `.env` in the built image |
 
 ---
 
@@ -565,24 +605,109 @@ disagree.
 ## 10. Suggested next steps
 
 1. ~~Fix the Gemini key~~ — **done, two bugs, both 2026-08-30**, see §8.2.
-   Auth header not query param, then a genuinely overloaded model, not a
-   console change either time. Step 19 (AI company summary) is genuinely
-   live; step 25 (NL research assistant) is **built**, see §X.8.
 2. ~~Fix corporate actions~~ — **done 2026-08-29**, see §9.1. Still needs
    `python -m app.jobs.backfill_corporate_actions` run once against the
-   production database once it exists/is reachable.
-3. **Deploy publicly** (§8.1) — the runbook is written and the images are
-   proven; needs account creation (Neon/Render/Vercel) only a human can do.
-4. ~~Add a rate limiter~~ — **done**, see §8.3's own note (in-memory token
-   bucket, two-layer: global backstop + per-route ceilings).
-5. ~~Peer-percentile normalization~~ — **done 2026-08-29**, see §9.4/§X.4.
-6. **Score backtesting (step 26) — checked 2026-08-29, deliberately not
-   started yet.** The `score` table holds only 5 distinct daily snapshots
-   (2026-08-23 through -28) across 260 assets at last check — building a
-   backtest against that would produce numbers that *look* like validation
-   but aren't; there isn't enough independent daily history yet for a
-   score-vs-forward-return correlation to mean anything. Revisit once
-   `score` has months of accumulated snapshots (the daily job is already
-   building that history every run — this is a "wait," not a blocker).
-7. **Upstox intraday/WebSocket (step 27)** — still needs live Upstox API
-   access to build against; not attempted blind.
+   production database once it exists.
+3. ~~Add a rate limiter~~ — **done**, see §8.3.
+4. ~~Peer-percentile normalization~~ — **done 2026-08-29**, see §9.4/§X.4.
+5. ~~NL research assistant~~ — **done 2026-08-30**, see `Build_plan.md` §X.8.
+6. **→ DEPLOY PUBLICLY (§8.1, §11.3).** This is the only remaining item that
+   blocks a real launch, and the only one that needs a human: it is account
+   creation (Neon/Render/Vercel) plus DNS, not code.
+7. **Re-run the security audit (§8.3)** — launched but aborted on a usage
+   limit; it produced no findings *and no assurance*.
+8. **Score backtesting (step 26)** — deliberately deferred. Checked
+   2026-08-29: the `score` table held only 5 distinct daily snapshots, far
+   too little for a score-vs-forward-return correlation to mean anything.
+   This is a "wait for the daily job to accumulate history", not a blocker.
+9. **Upstox intraday/WebSocket (step 27)** — needs live Upstox API access.
+
+---
+
+## 11. Handover — where we are right now
+
+*Written 2026-08-31 to hand this project to a fresh conversation. If you are
+picking this up cold, read this section and §8.1, then start at §11.3.*
+
+### 11.1 What shipped in the last two days
+
+Eleven commits, all on `main`, all pushed, working tree clean:
+
+| Commit | What |
+|---|---|
+| `a0881fa` | Rate limiter (token bucket, global backstop + per-route ceilings) |
+| `b49d25a` | SEBI + AI-generated disclaimers across footer, panels, emails |
+| `048684c` | **Corporate-actions data gap fixed** — NSE is reachable after all; now the primary source, yfinance the fallback |
+| `f0a931a` | Docs caught up with the above |
+| `5422c54` | **Peer-percentile normalization** (§X.4) — the last documented scoring gap |
+| `9c34ddb` | XBRL fundamentals feasibility research (reachable; deliberately not built — see §9.2) |
+| `893eb83` | **Gemini bug 1** — auth must be an `x-goog-api-key` header, not `?key=` |
+| `6fef025` | **Gemini bug 2** — `gemini-flash-latest` was genuinely overloaded; switched to `gemini-flash-lite-latest` + multi-key/multi-model fallback |
+| `5d9d4fe` | **NL Research Assistant** (step 25) — 13 read-only tools, native function calling |
+| `1a28f4a` | Labeled qualitative general knowledge + company-page "Ask about X" panel |
+| `998789f` | Rupee amounts in Indian convention (lakh/crore), never million/billion/trillion |
+
+### 11.2 Things a fresh conversation will otherwise get wrong
+
+- **The Gemini saga was TWO separate bugs**, and the first fix was real but
+  insufficient. Both are documented at length in
+  `app/providers/ai/gemini_summary.py`'s module docstring. If AI generation
+  breaks again, read that docstring *before* re-diagnosing — it has the exact
+  two-command test that tells the failure modes apart.
+- **`GEMINI_API_KEY` no longer exists.** It is `GEMINI_API_KEY_1` … `_4`, a
+  fallback pool (only `_1` required). Two keys, from two separate Google
+  accounts, are currently configured in `backend/.env` and the root `.env`.
+- **Live web search is blocked on billing, not on code.** Gemini's
+  `google_search` grounding tool (a) cannot be combined with this app's own
+  custom function-declaration tools in one request — a documented Gemini API
+  constraint — and (b) returned an immediate `429 RESOURCE_EXHAUSTED` on both
+  configured accounts, because grounding requires a linked Google Cloud
+  **billing account** to get any quota at all. Revisit only if the user sets
+  up billing; it would need its own second, search-only call path.
+- **Vertex AI was considered and rejected**: no standing free tier, requires
+  billing. Contradicts the project's zero-budget constraint.
+- **The research assistant may use general knowledge, but only labeled and
+  only qualitatively.** Numbers must always come from a tool. This was an
+  explicit user decision after the tension was flagged — don't "fix" it back
+  to strictly-grounded, and don't loosen it to unlabeled either.
+- **`Secrets/` on disk holds real credentials.** It is gitignored. Never
+  stage, commit, or print its contents.
+- **Podman VM sleep stops every container** (§9.6). If the DB is suddenly
+  unreachable, that is almost always the cause — `podman compose -f
+  docker-compose.prod.yml up -d`, not a code bug.
+
+### 11.3 Start here: deploying to marketlensai.in
+
+The domain is bought (GoDaddy). Nothing else is done. Full runbook in
+`Deployment.md`; the order that matters:
+
+1. **Database** — create a Neon or Supabase project, hand over the connection
+   string. Everything after "here is a connection string" is a coding task:
+   convert to `postgresql+psycopg://…?sslmode=require`, run
+   `alembic upgrade head`, then seed: `python -m app.services.universe` →
+   `python -m app.jobs.backfill_history --days 365` →
+   `python -m app.jobs.backfill_corporate_actions` (this last one has never
+   been run against a production DB — see §9.1).
+2. **Backend** — Render or Fly, root `backend`, health check
+   `/api/v1/health`. Set every var in §5.3 plus `ENABLE_SCHEDULER=true` and
+   **`TRUST_FORWARDED_FOR=true`** (§8.3 — get this wrong and every visitor
+   shares one rate-limit bucket).
+3. **Frontend** — Vercel, root `frontend`, `API_BASE_URL` = backend URL +
+   `/api/v1`. Confirm it works on the `*.vercel.app` URL *before* touching DNS.
+4. **DNS (GoDaddy)** — delete the auto-created "Parked" A record on `@` and
+   any `AAAA` on `@`, then add A `@` → `76.76.21.21` and CNAME `www` →
+   `cname.vercel-dns.com`.
+5. **Wire the origins** — set backend `CORS_ORIGINS=https://marketlensai.in`,
+   and add `https://marketlensai.in/api/auth/google/callback` to the Google
+   OAuth client *and* to `GOOGLE_REDIRECT_URI` (byte-identical).
+6. **Email** — add `marketlensai.in` in Resend, paste its MX/SPF/DKIM records
+   into GoDaddy, then point `RESEND_FROM_EMAIL` at an address on the verified
+   domain. Until this is done Resend only delivers to the account owner, so
+   **no real user can complete signup** (§8.2).
+7. **Smoke test** — `Deployment.md` §7.
+
+### 11.4 Verified working as of 2026-08-31
+
+Backend gates (`ruff`, `mypy app`, 943 tests) all green; frontend `lint`,
+`tsc --noEmit`, `build` all green; the full live check table in §8.3 passed.
+Both containers were rebuilt from the latest commit and confirmed serving.
