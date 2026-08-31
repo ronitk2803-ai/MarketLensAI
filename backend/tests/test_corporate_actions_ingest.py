@@ -67,6 +67,68 @@ def test_ingest_updates_changed_ratio(db: Session) -> None:
     assert row.ratio == 3.0
 
 
+def test_two_dividends_on_one_ex_date_both_persist(db: Session) -> None:
+    """A company routinely pays interim + final + special dividends sharing
+    one ex-date (NESTLEIND 2026-07-10 paid ₹5 and ₹2, live). Both must be
+    stored, and re-ingesting them must not raise on the now-ambiguous
+    (type, ex_date) lookup."""
+    asset = _make_asset(db)
+    events = [
+        CorporateActionEvent(type="dividend", ex_date=dt.date(2026, 7, 10), amount=5.0),
+        CorporateActionEvent(type="dividend", ex_date=dt.date(2026, 7, 10), amount=2.0),
+    ]
+
+    first = ingest_corporate_actions(db, asset.id, events, source="nse_actions")
+    assert first == IngestResult(created=2, updated=0, total=2)
+
+    second = ingest_corporate_actions(db, asset.id, events, source="nse_actions")
+    assert second == IngestResult(created=0, updated=2, total=2)
+
+    amounts = sorted(
+        float(r.amount)
+        for r in db.query(CorporateAction).filter_by(asset_id=asset.id, type="dividend").all()
+    )
+    assert amounts == [2.0, 5.0]
+
+
+def test_same_action_listed_twice_in_one_batch_is_deduped(db: Session) -> None:
+    """NSE occasionally returns one action twice in a single response (a
+    SIYSIL demerger, live 2026-08). With autoflush off the naive loop wrote
+    two identical rows; the batch must collapse them to one."""
+    asset = _make_asset(db)
+    dup = CorporateActionEvent(type="demerger", ex_date=dt.date(2026, 8, 21))
+
+    result = ingest_corporate_actions(db, asset.id, [dup, dup], source="nse_actions")
+
+    assert result.created == 1
+    assert db.query(CorporateAction).filter_by(asset_id=asset.id).count() == 1
+
+
+def test_ingest_tolerates_preexisting_duplicate_rows(db: Session) -> None:
+    """Rows an earlier pre-fix run duplicated must not make a later ingest
+    raise MultipleResultsFound — it updates one and leaves the rest."""
+    asset = _make_asset(db)
+    for _ in range(2):
+        db.add(
+            CorporateAction(
+                asset_id=asset.id,
+                type="demerger",
+                ex_date=dt.date(2026, 8, 21),
+                source="nse_actions",
+            )
+        )
+    db.flush()
+
+    result = ingest_corporate_actions(
+        db,
+        asset.id,
+        [CorporateActionEvent(type="demerger", ex_date=dt.date(2026, 8, 21))],
+        source="nse_actions",
+    )
+
+    assert result == IngestResult(created=0, updated=1, total=1)
+
+
 def test_get_or_fetch_uses_stored_rows_without_calling_provider(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

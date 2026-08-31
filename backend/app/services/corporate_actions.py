@@ -30,29 +30,63 @@ class IngestResult:
 def ingest_corporate_actions(
     db: Session, asset_id: int, events: list[CorporateActionEvent], *, source: str
 ) -> IngestResult:
+    """Upserts each event into `corporate_action`, keyed on
+    `(asset_id, type, ex_date)` — plus `amount` for dividends.
+
+    Dividends are the exception because a company routinely pays more than
+    one on a single ex-date (interim + final + special), all typed
+    `"dividend"`, so the amount is part of their identity — NESTLEIND's
+    2026-07-10 ₹5 + ₹2 is a real pair, not a duplicate. Splits, bonuses,
+    rights and demergers are unique per `(type, ex_date)`, and a changed
+    ratio there is a correction to apply in place (360ONE's 2x recorded
+    against a real 4x move, SUMMARISER.md §9.1).
+
+    The `seen` guard and `.first()` (not `.one_or_none()`) both exist
+    because the session is `autoflush=False`: two matching events in one
+    `events` list — NSE lists some actions twice, e.g. a SIYSIL demerger
+    live 2026-08 — would otherwise each miss the other's un-flushed INSERT
+    and create a duplicate row, which then makes the next run's lookup
+    ambiguous and raises `MultipleResultsFound`. This shipped that way; the
+    guard now also tolerates rows an earlier run already duplicated.
+    """
     created = 0
     updated = 0
+    seen: set[tuple[str, dt.date, Decimal | None]] = set()
     for event in events:
-        row = (
-            db.query(CorporateAction)
-            .filter_by(asset_id=asset_id, type=event.type, ex_date=event.ex_date)
-            .one_or_none()
+        ratio = _decimal(event.ratio)
+        amount = _decimal(event.amount)
+        key_amount = amount if event.type == "dividend" else None
+        key = (event.type, event.ex_date, key_amount)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        query = db.query(CorporateAction).filter_by(
+            asset_id=asset_id, type=event.type, ex_date=event.ex_date
         )
+        if event.type == "dividend":
+            query = query.filter(
+                CorporateAction.amount.is_(None)
+                if amount is None
+                else CorporateAction.amount == amount
+            )
+        row = query.order_by(CorporateAction.id).first()
+
         if row is None:
             db.add(
                 CorporateAction(
                     asset_id=asset_id,
                     type=event.type,
                     ex_date=event.ex_date,
-                    ratio=_decimal(event.ratio),
-                    amount=_decimal(event.amount),
+                    ratio=ratio,
+                    amount=amount,
                     source=source,
                 )
             )
             created += 1
         else:
-            row.ratio = _decimal(event.ratio)
-            row.amount = _decimal(event.amount)
+            row.ratio = ratio
+            row.amount = amount
             row.source = source
             updated += 1
     db.flush()
