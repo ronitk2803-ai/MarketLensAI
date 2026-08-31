@@ -535,7 +535,7 @@ Each step = one committable, testable unit sized for Claude Pro limits: implemen
 ## W. Definition of Done — MVP
 
 *Checked 2026-08-26. Everything is met **except the public URL** — the stack
-is verified end-to-end on `localhost:3100` against the real 500-company
+is verified end-to-end on `localhost:3000` against the real 500-company
 database, but has never been hosted.*
 
 - [ ] **Public URL** loads a clean, fast company page for any Nifty 500 stock. — **the one outstanding item.** Locally: ✅. Hosting checklist in `SUMMARISER.md` §8.1.

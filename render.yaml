@@ -1,0 +1,115 @@
+# Render Blueprint — backend API (FastAPI) for MarketLens AI / `mlai`.
+#
+# Render is the primary backend host in architecture/claude/Deployment.md §2.
+# `fly.toml` in backend/ is the documented alternative — deploy ONE of them,
+# not both.
+#
+# Usage: Render Dashboard → New → Blueprint → connect this repo. Render reads
+# this file, creates the service, and prompts for every `sync: false` value.
+#
+# The database is deliberately NOT defined here: Deployment.md §1 uses Neon or
+# Supabase (external managed Postgres), not Render's own. Paste that
+# connection string — converted to `postgresql+psycopg://…?sslmode=require` —
+# into DATABASE_URL when prompted.
+#
+# The container's start command runs `alembic upgrade head` before uvicorn
+# (see backend/Dockerfile), so schema migrations ship automatically on every
+# deploy. First deploy only: seed the DB once (Deployment.md §1 steps 5–6
+# plus `python -m app.jobs.backfill_corporate_actions` — see SUMMARISER.md
+# §9.1) against the same DATABASE_URL before the site is useful.
+
+services:
+  - type: web
+    name: mlai-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: starter            # free tier cold-starts; starter stays warm for the in-process scheduler
+    region: singapore        # closest Render region to NSE / India
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+
+    envVars:
+      # --- Required ---------------------------------------------------------
+      - key: ENV
+        value: production
+
+      - key: JWT_SECRET
+        # Render generates a strong value once and keeps it. The app refuses
+        # to boot without this (app/core/config.py) — a weak/missing secret
+        # would let anyone forge a session. Do NOT change it later: every
+        # existing session token becomes invalid the moment it rotates.
+        generateValue: true
+
+      - key: DATABASE_URL
+        sync: false           # Neon/Supabase pooled string, +psycopg, ?sslmode=require
+
+      - key: CORS_ORIGINS
+        sync: false           # the exact frontend origin, e.g. https://marketlensai.in
+                              # (comma-separated for more than one; no trailing slash)
+
+      # --- Platform-dependent — get these wrong and things break silently ---
+      - key: ENABLE_SCHEDULER
+        value: "true"         # Render web services are always-on → in-process APScheduler
+                              # runs daily_ingestion (Deployment.md §6 Option A)
+
+      - key: TRUST_FORWARDED_FOR
+        value: "true"         # Render is a real edge proxy → X-Forwarded-For is trustworthy.
+                              # If false here, every visitor shares ONE rate-limit bucket
+                              # keyed on Render's edge IP (app/core/rate_limit.py).
+
+      - key: DAILY_INGESTION_HOUR_IST
+        value: "20"           # 20:00 IST — after NSE Bhavcopy publishes
+
+      # --- AI: company summary + NL research assistant (Gemini free tier) ---
+      # Only _1 is required for the feature to work; _2.._4 are a fallback
+      # pool across separate Google accounts (app/providers/ai/gemini_summary.py).
+      # Unset → those two features return an honest 502, the rest of the app is fine.
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_3
+        sync: false
+      - key: GEMINI_API_KEY_4
+        sync: false
+
+      # --- Transactional email: verification + password-reset codes --------
+      # Unset → those flows return `502 [resend] RESEND_API_KEY not configured`.
+      # NOTE: until a domain is verified at resend.com/domains, the default
+      # onboarding@resend.dev sender only delivers to the Resend account
+      # owner — set RESEND_FROM_EMAIL to an address on the verified domain
+      # before real users can sign up (SUMMARISER.md §8.2).
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false           # e.g. "MarketLens AI <noreply@marketlensai.in>"
+
+      # --- "Sign in with Google" (optional) -------------------------------
+      # Unset → GET /auth/providers returns {"google": false} and the button
+      # is hidden. GOOGLE_REDIRECT_URI must match a URI registered in the
+      # Google Cloud console byte-for-byte, e.g.
+      # https://marketlensai.in/api/auth/google/callback
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+
+      # --- Upstox market data (optional) ----------------------------------
+      # Unset → the auth-free NSE Bhavcopy EOD spine covers prices. If set,
+      # the access token still needs a manual 3-step refresh daily AND after
+      # every redeploy (Deployment.md §5) — it is in-memory by design.
+      - key: UPSTOX_API_KEY
+        sync: false
+      - key: UPSTOX_API_SECRET
+        sync: false
+      - key: UPSTOX_REDIRECT_URI
+        sync: false
+
+      # --- Admin endpoints (optional) ------------------------------------
+      # Unset → /admin/* is simply unreachable. Set to a long random string
+      # to enable the Upstox token-refresh endpoint and /admin/metrics.
+      - key: ADMIN_TOKEN
+        sync: false

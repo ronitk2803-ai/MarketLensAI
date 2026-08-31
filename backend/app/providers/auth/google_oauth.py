@@ -13,10 +13,12 @@ all to re-establish something the direct exchange already guarantees. One
 extra ~200ms HTTP call buys the simpler, harder-to-get-wrong version.
 
 The redirect URI must match what is registered in the Google Cloud console
-byte for byte, and it differs per environment (:3000 bare-metal dev, :3100
-prod container). It lives in settings for exactly that reason — and both
-must be registered, since Google treats them as distinct URIs. Google
-permits plain http only for localhost/127.0.0.1.
+byte for byte. Local dev and the prod container both use
+http://localhost:3000/api/auth/google/callback (the container's frontend is
+on 3000 too — docker-compose.prod.yml); a hosted deploy adds its own domain
+as a second registered URI. It lives in settings so the authorize-URL value
+and the token-exchange value can't drift apart. Google permits plain http
+only for localhost/127.0.0.1.
 """
 
 from dataclasses import dataclass

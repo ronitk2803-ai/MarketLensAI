@@ -11,9 +11,11 @@
 > §X.8) was the last one. Auth is extended beyond the original P1 scope with
 > email verification, password reset and Google sign-in. The
 > corporate-actions data gap (§9.1, the highest-impact known data bug) is
-> fixed, and so are both Gemini bugs (§8.2) — the AI company summary and the
-> research assistant are genuinely live, verified end-to-end, not just
-> code-complete.
+> fixed — and the backfill is now **run against the podman prod stack**, not
+> just code-complete. Both Gemini bugs (§8.2) are fixed too; the AI company
+> summary and the research assistant are genuinely live, verified end-to-end.
+> A full re-verification pass on 2026-08-31 — all gates green (943 tests);
+> live prices, AI, and every page confirmed working — is in §11.5.
 >
 > **The one thing left is deployment.** The domain **marketlensai.in** is
 > purchased (GoDaddy). The app runs end-to-end in containers on the
@@ -186,6 +188,13 @@ so model/migration drift fails in CI rather than on deploy.
 
 ### 4.7 Live data coverage (the developer's prod container, 2026-08-26)
 
+> **Update 2026-08-31:** `backfill_corporate_actions` has now been run against
+> this container (§9.1's open item). `corporate_action` is 15,591 rows —
+> 3,817 from `nse_actions` — and now includes **81 bonuses, 25 rights, 18
+> demergers** yfinance never had; BAJFINANCE/BAJAJFINSV/ABFRL/SIEMENS
+> adjusted charts verified smooth across their ex-dates. `price_ohlcv` runs
+> to 2026-08-28. Other rows below are the 2026-08-26 snapshot.
+
 | Table | Rows |
 |---|---|
 | Active NSE equities | **500** (+41 ETFs, excluded from screens) |
@@ -222,11 +231,15 @@ Frontend gates are `npm run lint`, `npx tsc --noEmit`, `npm run build`.
 podman compose -f docker-compose.prod.yml up -d --build
 ```
 
-Frontend <http://localhost:3100>, backend <http://localhost:8000>. Isolated
-from the dev compose file: own project name, own volume, Postgres on **5433**
-(dev is on 5432). Bringing it up will not touch a dev database.
+Frontend <http://localhost:3000>, backend <http://localhost:8000>. The DB is
+isolated from the dev compose file — own project name, own volume, Postgres
+on **5433** (dev is on 5432), so bringing it up will not touch a dev
+database. The frontend port (3000) is deliberately the *same* as bare-metal
+dev, so one localhost Google OAuth redirect URI covers both — run this stack
+**or** `npm run dev`, not both.
 
-A fresh database is empty. Seed it — the universe first, then prices:
+A fresh database is empty. Seed it — universe, then prices, then corporate
+actions:
 
 ```bash
 podman compose -f docker-compose.prod.yml exec backend python -m app.services.universe
@@ -234,9 +247,14 @@ podman compose -f docker-compose.prod.yml exec backend python -m app.services.un
 ```bash
 podman compose -f docker-compose.prod.yml exec backend python -m app.jobs.backfill_history --days 365
 ```
+```bash
+podman compose -f docker-compose.prod.yml exec backend python -m app.jobs.backfill_corporate_actions
+```
 
-Then scores (slow — ~2.5 s/asset for a live fundamentals fetch, so ~20 min for
-the Nifty 500):
+The third pulls full split/bonus/demerger history from NSE — without it the
+adjusted chart and indicators are wrong on any stock with a bonus or
+demerger yfinance missed (§9.1). Then scores (slow — ~2.5 s/asset for a live
+fundamentals fetch, so ~20 min for the Nifty 500):
 
 ```bash
 podman compose -f docker-compose.prod.yml exec backend python -m app.jobs.daily_ingestion
@@ -391,14 +409,14 @@ The failure path itself was hardened in `eb449e8`, so a broken key now fails in
 ≤45 s (was ~94 s), is negative-cached for 10 minutes, is recorded to
 `provider_fetch_log`, and surfaces the provider's real message in the UI.
 
-**Resend — NOT YET OBTAINED. Verification and password reset cannot send
-email until it is.** The code is complete and tested; without `RESEND_API_KEY`
-both flows fail with an honest `502 [resend] RESEND_API_KEY not configured`
-rather than silently doing nothing.
+**Resend — KEY OBTAINED (2026-08-31), domain NOT verified.** A real
+`re_…` key is set in `backend/.env` and the repo-root `.env`. Not tested
+with a live send from here. `RESEND_FROM_EMAIL` is still the default
+`onboarding@resend.dev`, so the owner-only-delivery constraint below is
+fully in force — **no real user can complete signup yet.** Without a key at
+all, both flows fail with an honest `502 [resend] RESEND_API_KEY not
+configured` rather than silently doing nothing.
 
-> **Get one** at resend.com/api-keys and set `RESEND_API_KEY` in `backend/.env`
-> (bare-metal) and the repo-root `.env` (container).
->
 > **The constraint that will bite you:** until a domain is verified at
 > resend.com/domains, the default `onboarding@resend.dev` sender delivers
 > **only to the address that owns the Resend account** and returns 403 for
@@ -407,17 +425,22 @@ rather than silently doing nothing.
 > `RESEND_FROM_EMAIL` at an address on it before anyone else can sign up.
 > The provider translates that 403 into a message naming the fix.
 
-**Google OAuth — NOT YET CONFIGURED.** Code complete; `GET /auth/providers`
-returns `{"google": false}` and the sign-in button is hidden until it is set.
+**Google OAuth — CONFIGURED for local (2026-08-31).** A client is set up and
+`GET /auth/providers` returns `{"google": true}`, so the sign-in button
+shows. Verified only that far — an actual browser sign-in round trip has
+not been re-tested. A hosted deploy still needs its own domain added as a
+redirect URI (see below).
 
-> **Set up** an OAuth client at console.cloud.google.com → APIs & Services →
-> Credentials → OAuth client ID → Web application. Register **both**
-> `http://localhost:3000/api/auth/google/callback` (bare-metal dev) and
-> `http://localhost:3100/api/auth/google/callback` (prod container) as
-> authorized redirect URIs — Google treats them as distinct, and permits
-> plain `http` only for `localhost`/`127.0.0.1`. Then set
-> `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI`
-> (the value must match the environment it runs in, byte for byte).
+> **Set up / add an environment:** an OAuth client at
+> console.cloud.google.com → APIs & Services → Credentials → OAuth client ID
+> → Web application. Local dev and the prod container share
+> `http://localhost:3000/api/auth/google/callback` (the container frontend
+> is on 3000 too — see §5.1); a hosted deploy adds
+> `https://marketlensai.in/api/auth/google/callback` as a second registered
+> URI. Google treats each as distinct and permits plain `http` only for
+> `localhost`/`127.0.0.1`. Then set `GOOGLE_CLIENT_ID`,
+> `GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI` (byte-identical to the
+> registered URI for that environment).
 
 **Upstox — works, but two manual steps are permanent by design:**
 - The access token expires daily ~03:30 IST and Upstox issues no refresh token.
@@ -514,12 +537,18 @@ whole market, not 500), which incidentally fixed a second latent bug: the
 old per-asset lazy path only ever fetched once per asset, so a genuinely
 new action for an already-seeded asset was never caught by anything.
 
-**Still open:** the production database (500 companies, 5 years of history
-— the one this bug was originally measured against) has not yet had
-`backfill_corporate_actions` run against it; that database wasn't reachable
-from the environment this fix was built in. Run it once, post-deploy or
-against the podman prod stack, to retroactively correct BAJFINANCE/ABFRL/
-VEDL/etc.'s historical charts and indicators.
+**Resolved 2026-08-31:** `backfill_corporate_actions` has now been run
+against the podman prod stack (500 companies, 5 years). 3,825 rows ingested,
+138 newly created — the prod DB now carries 81 bonuses, 25 rights and 18
+demergers `nse_actions` supplied that yfinance never had. Spot-checked:
+BAJFINANCE (2025-06-16 5:1 bonus + 1:2 split), BAJAJFINSV (2022-09-13 1:1
+bonus + 1:5 split), ABFRL and SIEMENS demergers all present, and the
+adjusted price series is now smooth across each ex-date (BAJFINANCE
+2025-06-13→06-16 is +0.5%, not the pre-fix ≈−80% artifact). Adjustment is
+applied at read time, so charts/technicals/historical-events were corrected
+immediately; stored `score` snapshots refresh on the next `daily_ingestion`.
+**A hosted deploy still needs this run once** against its own fresh DB —
+Deployment.md §1 step 7.
 
 ### 9.2 Fundamentals are single-source and shallow
 
@@ -605,9 +634,10 @@ disagree.
 ## 10. Suggested next steps
 
 1. ~~Fix the Gemini key~~ — **done, two bugs, both 2026-08-30**, see §8.2.
-2. ~~Fix corporate actions~~ — **done 2026-08-29**, see §9.1. Still needs
-   `python -m app.jobs.backfill_corporate_actions` run once against the
-   production database once it exists.
+2. ~~Fix corporate actions~~ — **done 2026-08-29**; backfill **run against the
+   podman prod stack 2026-08-31**, see §9.1. A hosted deploy still needs
+   `python -m app.jobs.backfill_corporate_actions` once against its fresh DB
+   (Deployment.md §1 step 7).
 3. ~~Add a rate limiter~~ — **done**, see §8.3.
 4. ~~Peer-percentile normalization~~ — **done 2026-08-29**, see §9.4/§X.4.
 5. ~~NL research assistant~~ — **done 2026-08-30**, see `Build_plan.md` §X.8.
@@ -686,8 +716,9 @@ The domain is bought (GoDaddy). Nothing else is done. Full runbook in
    convert to `postgresql+psycopg://…?sslmode=require`, run
    `alembic upgrade head`, then seed: `python -m app.services.universe` →
    `python -m app.jobs.backfill_history --days 365` →
-   `python -m app.jobs.backfill_corporate_actions` (this last one has never
-   been run against a production DB — see §9.1).
+   `python -m app.jobs.backfill_corporate_actions` → `python -m
+   app.jobs.daily_ingestion`. (The backfill is proven against the podman
+   prod stack; a fresh hosted DB still needs its own run — §9.1.)
 2. **Backend** — Render or Fly, root `backend`, health check
    `/api/v1/health`. Set every var in §5.3 plus `ENABLE_SCHEDULER=true` and
    **`TRUST_FORWARDED_FOR=true`** (§8.3 — get this wrong and every visitor
@@ -708,6 +739,45 @@ The domain is bought (GoDaddy). Nothing else is done. Full runbook in
 
 ### 11.4 Verified working as of 2026-08-31
 
-Backend gates (`ruff`, `mypy app`, 943 tests) all green; frontend `lint`,
-`tsc --noEmit`, `build` all green; the full live check table in §8.3 passed.
-Both containers were rebuilt from the latest commit and confirmed serving.
+Backend gates (`ruff`, `mypy app` — 109 files, 943 tests) all green; frontend
+`lint`, `tsc --noEmit`, `build` all green; the full live check table in §8.3
+passed. Both containers were rebuilt from the latest commit and confirmed
+serving.
+
+### 11.5 Full re-verification pass, 2026-08-31
+
+A second pass the same day, from the handover doc outward:
+
+- **Build vs. plan** — every §S / §4 item accounted for in code: 46 route
+  handlers, all 7 engine packages, all 14 providers, 24 tables, 16
+  migrations, all 14 frontend pages build. Steps 26 (backtesting) and 27
+  (Upstox WS) are the only gaps, both deliberate.
+- **Gates** — `ruff` clean, `mypy` clean (109 files), `alembic upgrade head`
+  clean, **943 pytest passed** (~2.5 min); frontend `lint` / `tsc` / `build`
+  clean. *(A first `pytest` run showed mass failures — the dev Postgres
+  container was stopped; bare-metal tests hit `localhost:5432` directly.
+  Started it, migrated, re-ran → all green.)*
+- **Runtime, against the podman prod stack** — `/health` + every public
+  endpoint 200; **live quotes** (`yfinance_quotes`) return real-time data;
+  **AI company summary** generated live (WIPRO, grounded); **NL research
+  assistant** answered a multi-tool question end-to-end (4 tool calls, real
+  computed numbers) and correctly reported an empty account for the
+  user-scoped tools; all 14 pages 200; company page renders the candlestick
+  chart with DMA overlays, volume, and corporate-action markers; scheduler
+  armed (`daily_ingestion scheduled for 20:00 Asia/Kolkata`).
+- **Security spot-check on the newest code** — `research_assistant.py` tool
+  dispatch can't be steered into overriding `db`/`user` (kwarg collision →
+  `TypeError`, caught); all four user-scoped tools filter by `user.id` at the
+  service layer; `/assistant/ask` bounds input (2000 / 32 chars), gates on
+  `get_current_verified_user`, rate-limited 10/day. No secrets in any tracked
+  file; none in the built image. **The full multi-surface audit (§8.3) is
+  still not done** — this was the new code only.
+- **Fixes applied this pass** — corporate-actions backfill run against the
+  prod stack (§9.1); `3100`→`3000` port drift corrected across compose
+  comments, `config.py`, `google_oauth.py`, and these docs; required env
+  vars (`JWT_SECRET` etc.) added to Deployment.md §2; `render.yaml`,
+  `backend/fly.toml`, `frontend/vercel.json` written; empty
+  `backend/db_dump.sql` untracked and gitignored.
+
+**Still open before public launch:** the §8.3 security audit; a verified
+Resend domain (§8.2); the deploy itself (§8.1).

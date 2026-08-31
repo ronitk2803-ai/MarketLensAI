@@ -245,6 +245,8 @@ architecture/.DS_Store
 # Intentional local database backups — kept on disk on purpose, never committed.
 backend/data.sql
 backend/data copy.sql
+backend/db_dump.sql
+backend/db_dump*.sql
 
 # Real API keys/OAuth client files dropped here during setup — never commit.
 Secrets/

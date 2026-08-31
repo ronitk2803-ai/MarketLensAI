@@ -60,8 +60,10 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     # Must match a redirect URI registered in the Google Cloud console
-    # EXACTLY, and differs per environment — :3000 bare-metal dev, :3100
-    # for the prod container. Held here rather than in the frontend so the
+    # EXACTLY. Local dev and the prod container both use
+    # http://localhost:3000/api/auth/google/callback (the container's
+    # frontend is on 3000 too — docker-compose.prod.yml); a hosted deploy
+    # uses its real domain. Held here rather than in the frontend so the
     # value sent in the authorize URL and the one sent in the token
     # exchange cannot drift apart, which Google rejects with a famously
     # unhelpful error.

@@ -31,13 +31,15 @@ images the hosted deploy uses.
 podman compose -f docker-compose.prod.yml up -d --build
 ```
 
-Frontend on <http://localhost:3100>, backend on <http://localhost:8000>.
-It is deliberately isolated from the dev `docker-compose.yml`: its own
-project name, its own volume, Postgres on 5433 instead of 5432. Bringing it
-up will not touch your dev database. (The explicit `name:` in that file is
-what guarantees this — without it, compose derives the project name from the
-directory, both files collide, and the dev Postgres container gets recreated
-against the prod volume.)
+Frontend on <http://localhost:3000>, backend on <http://localhost:8000>.
+The database is deliberately isolated from the dev `docker-compose.yml`: its
+own project name, its own volume, Postgres on 5433 instead of 5432. Bringing
+it up will not touch your dev database. (The explicit `name:` in that file
+is what guarantees this — without it, compose derives the project name from
+the directory, both files collide, and the dev Postgres container gets
+recreated against the prod volume.) The frontend port (3000) intentionally
+matches bare-metal dev so one localhost Google OAuth redirect URI covers
+both — run this stack **or** `npm run dev`, not both at once.
 
 Then seed it — a fresh database has no universe and no prices, so every page
 is empty until you do:
@@ -48,13 +50,21 @@ podman compose -f docker-compose.prod.yml exec backend python -m app.services.un
 ```bash
 podman compose -f docker-compose.prod.yml exec backend python -m app.jobs.backfill_history --days 365
 ```
+```bash
+podman compose -f docker-compose.prod.yml exec backend python -m app.jobs.backfill_corporate_actions
+```
 
 The first defines the universe: it takes NSE's Nifty 500 constituent CSV as
 the membership list and Upstox's public instrument dump (no token needed)
 for the instrument keys, seeding the 500 members and marking everything else
 inactive. Pass `--index all` to seed the full ~2,643-instrument tradable list
 instead. The second backfills a year of end-of-day prices from NSE Bhavcopy
-in committed monthly chunks. Screens and charts work as soon as it finishes.
+in committed monthly chunks. The third pulls the full corporate-action
+history from NSE (splits, bonuses, demergers, rights) — without it the price
+chart and every indicator are wrong on any stock that had a bonus or
+demerger the yfinance fallback missed (SUMMARISER.md §9.1); the daily job
+then keeps a rolling ~13-month window fresh. Screens and charts work as soon
+as `backfill_history` finishes.
 
 Scores are the slow part: each asset needs a live fundamentals fetch at
 ~2.5s, so the Nifty 500 takes ~20 minutes (the unfiltered universe would be
@@ -129,50 +139,99 @@ whichever account you'd rather have.
    Chunked and committed per month on purpose — `backfill_universe_from_
    bhavcopy` holds a whole run in one transaction, which is right for the
    daily 10-day delta and wrong for a year across 2.6k symbols.
+7. Backfill corporate actions, or every split/bonus/demerger before the
+   daily job's rolling window is missing and the adjusted price series is
+   wrong for those stocks:
+   ```bash
+   DATABASE_URL="...same string as above..." \
+     .venv/bin/python -m app.jobs.backfill_corporate_actions
+   ```
+   Pulls the full history from NSE's `corporates-corporateActions` endpoint
+   (SUMMARISER.md §9.1). yfinance is only the fallback and misses bonus
+   issues and demergers entirely, so skipping this ships visibly wrong
+   charts on names like BAJFINANCE, ABFRL, VEDL. The daily job keeps a
+   rolling ~13-month window fresh after this.
 
 ---
 
 ## 2. Backend — Render or Fly.io
 
-Both build from the `backend/Dockerfile` directly; pick one.
+Both build from the `backend/Dockerfile` directly; pick one. There is a
+ready config for each in the repo — [`render.yaml`](../../render.yaml) at the
+root, [`backend/fly.toml`](../../backend/fly.toml) — that presets the
+health check, region, and the non-secret env vars (`ENV`,
+`ENABLE_SCHEDULER`, `TRUST_FORWARDED_FOR`, `DAILY_INGESTION_HOUR_IST`). Use
+one; delete or ignore the other.
+
+### Environment variables
+
+The full reference with defaults is `SUMMARISER.md` §5.3. What each host
+needs:
+
+**Required — the app will not boot without these:**
+
+| Key | Value |
+|---|---|
+| `ENV` | `production` |
+| `JWT_SECRET` | a long random string (`python3 -c "import secrets;print(secrets.token_urlsafe(48))"`). **No default — a missing/weak value lets anyone forge a session, so the app refuses to start.** `render.yaml` auto-generates this; on Fly set it with `fly secrets set`. Never rotate it after launch — every live session dies the moment it changes. |
+| `DATABASE_URL` | the pooled connection string from §1, as `postgresql+psycopg://…?sslmode=require` |
+| `CORS_ORIGINS` | the exact frontend origin, e.g. `https://marketlensai.in` (comma-separated for more than one; no trailing slash). Cross-origin fetches fail **silently in the browser console** if this is wrong. |
+
+**Platform-dependent — safe-looking defaults that are wrong on a hosted proxy:**
+
+| Key | Value |
+|---|---|
+| `ENABLE_SCHEDULER` | `true` — Render/Fly web services are always-on, so the in-process APScheduler runs `daily_ingestion` (§6 Option A). Leave off only if you use a platform cron instead. |
+| `TRUST_FORWARDED_FOR` | `true` — Render/Fly sit in front of the container as a real reverse proxy, so `X-Forwarded-For` reflects the visitor's IP. Get this wrong and every visitor shares **one** rate-limit bucket keyed on the edge IP (`app/core/rate_limit.py`). |
+| `DAILY_INGESTION_HOUR_IST` | `20` (default) — 20:00 IST, after NSE Bhavcopy publishes |
+
+**Feature keys — unset just disables that feature with an honest 502, the rest of the app is fine:**
+
+| Key | Value |
+|---|---|
+| `GEMINI_API_KEY_1` (`_2`/`_3`/`_4` optional) | Gemini free-tier key(s) — powers the AI company summary and NL research assistant. Only `_1` is needed; the rest are a fallback pool across separate Google accounts. |
+| `RESEND_API_KEY` | Resend key (`re_…`) for verification + password-reset email |
+| `RESEND_FROM_EMAIL` | e.g. `MarketLens AI <noreply@marketlensai.in>`. **Must be an address on a domain verified at resend.com/domains** — the default `onboarding@resend.dev` only delivers to the Resend account owner, so real signups silently can't complete (`SUMMARISER.md` §8.2). |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | from the Google Cloud OAuth client. Unset → `GET /auth/providers` returns `{"google": false}` and the button is hidden. |
+| `GOOGLE_REDIRECT_URI` | byte-identical to a URI registered on that OAuth client, e.g. `https://marketlensai.in/api/auth/google/callback` |
+
+**Optional:**
+
+| Key | Value |
+|---|---|
+| `ADMIN_TOKEN` | a long random string — gates `/admin/*` (the Upstox token-refresh endpoint, `/admin/metrics`). Unset → those routes are simply unreachable. |
+| `UPSTOX_API_KEY` / `UPSTOX_API_SECRET` / `UPSTOX_REDIRECT_URI` | from your Upstox developer app (§4). Unset → the auth-free NSE Bhavcopy EOD spine covers prices. If set, the token needs a manual refresh daily **and after every redeploy** (§5). |
 
 ### Render
-1. New → Web Service → connect this repo, root directory `backend`.
-2. Render auto-detects the Dockerfile. Set the health check path to `/api/v1/health`.
-3. Instance type: the free/starter tier is fine for MVP traffic.
-4. Environment variables (Render → Environment tab):
-
-   | Key | Value |
-   |---|---|
-   | `ENV` | `production` |
-   | `DATABASE_URL` | the pooled connection string from step 1 |
-   | `CORS_ORIGINS` | your Vercel URL, e.g. `https://mlai.vercel.app` |
-   | `UPSTOX_API_KEY` | from your Upstox developer app |
-   | `UPSTOX_API_SECRET` | from your Upstox developer app |
-   | `UPSTOX_REDIRECT_URI` | must exactly match what's registered with Upstox — see §4 |
-   | `ADMIN_TOKEN` | any long random string you generate — gates `/admin/*` |
-   | `ENABLE_SCHEDULER` | `true` (Render's web service is always-on, so the in-process APScheduler default works — see §5 if you'd rather use Render's own Cron Job feature instead) |
-   | `TRUST_FORWARDED_FOR` | `true` — Render sits in front of this container as a real reverse proxy, so `X-Forwarded-For` genuinely reflects the visitor's IP here. This is the one rate-limiter setting (app/core/rate_limit.py) that's platform-dependent rather than optional-with-a-safe-default: get it wrong and every visitor is keyed on Render's own edge IP instead of their own, so they all share one rate-limit bucket. |
-
-5. Deploy. Watch the build logs for the `alembic upgrade head` line on
+1. New → **Blueprint** → connect this repo; Render reads `render.yaml` and
+   prompts for every `sync: false` value. (Or: New → Web Service, root
+   directory `backend`, Dockerfile auto-detected, health check
+   `/api/v1/health`, and set the table above by hand.)
+2. Deploy. Watch the build logs for the `alembic upgrade head` line on
    container start — it should report no pending revisions (you already
-   applied them in step 1) and then uvicorn should come up.
-6. Hit `https://<your-render-url>/api/v1/health` — expect
+   applied them in §1) and then uvicorn comes up.
+3. Hit `https://<your-render-url>/api/v1/health` — expect
    `{"status": "ok"}`, per
    [test_health.py](../../backend/tests/test_health.py).
 
 ### Fly.io (alternative)
 ```bash
 cd backend
-fly launch --no-deploy   # generates fly.toml, pick the region/org interactively
-fly secrets set DATABASE_URL="..." CORS_ORIGINS="https://mlai.vercel.app" \
-  UPSTOX_API_KEY="..." UPSTOX_API_SECRET="..." UPSTOX_REDIRECT_URI="..." \
-  ADMIN_TOKEN="..." ENABLE_SCHEDULER="true" TRUST_FORWARDED_FOR="true"
+fly launch --no-deploy   # keeps the committed fly.toml; pick region/org interactively
+fly secrets set \
+  DATABASE_URL="postgresql+psycopg://…?sslmode=require" \
+  JWT_SECRET="$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')" \
+  CORS_ORIGINS="https://marketlensai.in" \
+  GEMINI_API_KEY_1="…" RESEND_API_KEY="…" \
+  RESEND_FROM_EMAIL="MarketLens AI <noreply@marketlensai.in>" \
+  GOOGLE_CLIENT_ID="…" GOOGLE_CLIENT_SECRET="…" \
+  GOOGLE_REDIRECT_URI="https://marketlensai.in/api/auth/google/callback"
 fly deploy
 ```
-Fly builds the same `backend/Dockerfile` — no separate `fly.toml` app
-config is needed beyond what `fly launch` generates, since the Dockerfile
-already defines the start command.
+`backend/fly.toml` sets the non-secret env, `internal_port = 8000`, the
+`/api/v1/health` check, and `min_machines_running = 1` with
+`auto_stop_machines = "off"` — the last two matter because the in-process
+scheduler only fires while a machine is up.
 
 ---
 
