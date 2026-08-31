@@ -24,7 +24,11 @@ services:
     runtime: docker
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
-    plan: starter            # free tier cold-starts; starter stays warm for the in-process scheduler
+    plan: free               # free: sleeps after 15 min idle, ~50s cold start on the next hit.
+                             # The nightly data job therefore CANNOT run in-process here —
+                             # it runs as a GitHub Actions cron instead
+                             # (.github/workflows/nightly-ingestion.yml). Bump to `starter`
+                             # (~$7/mo) later to keep it warm and flip ENABLE_SCHEDULER to true.
     region: singapore        # closest Render region to NSE / India
     healthCheckPath: /api/v1/health
     autoDeploy: true
@@ -50,16 +54,15 @@ services:
 
       # --- Platform-dependent — get these wrong and things break silently ---
       - key: ENABLE_SCHEDULER
-        value: "true"         # Render web services are always-on → in-process APScheduler
-                              # runs daily_ingestion (Deployment.md §6 Option A)
+        value: "false"        # MUST stay false on the free plan (it sleeps, so an
+                              # in-process cron would miss most runs). The nightly
+                              # ingestion runs in GitHub Actions instead. Flip to
+                              # "true" only after moving to a paid always-on plan.
 
       - key: TRUST_FORWARDED_FOR
         value: "true"         # Render is a real edge proxy → X-Forwarded-For is trustworthy.
                               # If false here, every visitor shares ONE rate-limit bucket
                               # keyed on Render's edge IP (app/core/rate_limit.py).
-
-      - key: DAILY_INGESTION_HOUR_IST
-        value: "20"           # 20:00 IST — after NSE Bhavcopy publishes
 
       # --- AI: company summary + NL research assistant (Gemini free tier) ---
       # Only _1 is required for the feature to work; _2.._4 are a fallback

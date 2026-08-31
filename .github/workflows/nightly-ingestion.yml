@@ -1,0 +1,43 @@
+name: Nightly ingestion
+
+# Runs app.jobs.daily_ingestion (prices -> corporate actions -> Opportunity
+# Scores) once a day against the hosted database. This lives here rather than
+# in the backend process because the Render free plan sleeps after 15 min
+# idle, so an in-process APScheduler would miss most runs. GitHub's cron is
+# independent of whether the API is awake.
+#
+# Needs two repo secrets (Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL  - the Neon string, converted to postgresql+psycopg://...
+#   JWT_SECRET    - any value; app.core.config requires it at import time,
+#                   this job never signs a token
+#
+# Scheduled runs only fire from the default branch. Use "Run workflow"
+# (workflow_dispatch) for the first run and for testing.
+
+on:
+  schedule:
+    - cron: "30 14 * * *"   # 14:30 UTC = 20:00 IST, after NSE Bhavcopy publishes
+  workflow_dispatch: {}
+
+# A run can take ~20-30 min (a live fundamentals fetch per company); never
+# let two overlap.
+concurrency:
+  group: nightly-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen --no-dev
+      - name: Run daily ingestion
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: uv run python -m app.jobs.daily_ingestion
