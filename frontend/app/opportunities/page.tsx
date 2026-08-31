@@ -10,10 +10,22 @@ import { cn } from "@/lib/utils";
 // This is a static route (no [param] segment), so Next attempts to
 // prerender it at build time by default — which fails when the backend
 // isn't running during `next build` (verified live: ECONNREFUSED against
-// API_BASE_URL). Screening results should reflect current data on each
-// request anyway (the fetch-level `revalidate` above already bounds
-// staleness), so force this dynamic rather than statically cached.
-export const dynamic = "force-dynamic";
+// API_BASE_URL).
+//
+// `revalidate = 0`, NOT `dynamic = "force-dynamic"` (what this was until
+// 2026-09-01, on the mistaken belief below that the two combine — they
+// don't). `force-dynamic` forces per-request rendering, same as
+// `revalidate = 0`, but it ALSO hard-sets fetchCache to "force-no-store",
+// which per Next's own docs overrides even an individual fetch's own
+// explicit `next: {revalidate}`. So "the fetch-level revalidate above
+// already bounds staleness" was never true while force-dynamic was set —
+// it was fully defeated, and every request re-fetched and re-transferred
+// the whole result set from the backend/Neon uncached. `revalidate = 0`
+// keeps this dynamic (verified: still builds clean against an unreachable
+// backend) while actually letting getOpportunities' revalidate: 900 apply.
+// Found chasing a Neon "88% of monthly network transfer" warning on a
+// 12-hour-old project (SUMMARISER.md §8.8).
+export const revalidate = 0;
 // See company/[symbol]/page.tsx — cold free-tier backend can exceed the
 // default 10s Vercel function budget.
 export const maxDuration = 60;

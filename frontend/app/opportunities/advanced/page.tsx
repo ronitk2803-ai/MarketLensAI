@@ -11,7 +11,13 @@ import type { OpportunityHit, ScreenerMeta } from "@/lib/api";
 
 // Same reasoning as /opportunities: a static route Next would otherwise
 // try to prerender against a backend that isn't running at build time.
-export const dynamic = "force-dynamic";
+//
+// `revalidate = 0`, not `dynamic = "force-dynamic"` (see /opportunities'
+// comment) — force-dynamic silently defeats getOpportunityIndustries' and
+// getScreenerMetrics' own `revalidate: 3600`. runScreener itself is
+// already `cache: "no-store"` (an authenticated POST), unaffected either
+// way.
+export const revalidate = 0;
 
 export default async function AdvancedScreenerPage({
   searchParams,

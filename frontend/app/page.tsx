@@ -12,7 +12,23 @@ import type { Meta, OpportunityHit } from "@/lib/api";
 // Reads live screener output, so it must not be frozen into the build (the
 // backend isn't reachable during `next build`) — same reasoning as
 // /opportunities.
-export const dynamic = "force-dynamic";
+//
+// `revalidate = 0`, NOT `dynamic = "force-dynamic"` (what this was until
+// 2026-09-01). Both force per-request rendering and equally avoid the
+// build-time-fetch problem above — verified by building locally against
+// an unreachable backend, same as production's build environment, and
+// `/` still comes out ƒ Dynamic either way. But `force-dynamic` ALSO hard-
+// sets fetchCache to "force-no-store", which — per Next's own docs —
+// overrides even an individual fetch's own explicit `next: {revalidate}`,
+// "even if x provides a 'force-cache' option". That silently defeated
+// getOpportunities' `revalidate: 900` below: every single homepage view
+// was re-fetching and re-transferring all four boards' full result sets
+// from the backend/Neon, uncached, forever. `revalidate = 0` forces the
+// page dynamic the same way but explicitly LEAVES a fetch's own positive
+// revalidate as-is, so the 900s cache actually applies. Found chasing a
+// Neon "88% of monthly network transfer" warning on a 12-hour-old project
+// (SUMMARISER.md §8.8).
+export const revalidate = 0;
 // See company/[symbol]/page.tsx — cold free-tier backend can exceed the
 // default 10s Vercel function budget.
 export const maxDuration = 60;
