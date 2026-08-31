@@ -377,6 +377,14 @@ class AppUser(Base):
     # unchanged if the user renames their Gmail address, which is exactly
     # why the link is keyed on this rather than on email.
     google_sub: Mapped[str | None] = mapped_column(unique=True, default=None)
+    # What to call this person in the UI. NULL for every password signup —
+    # the register form doesn't ask, and deriving one from the local part of
+    # the address ("ronit.k2803" -> "Ronit") is exactly the fabrication
+    # SUMMARISER §7 rule 1 forbids. Read paths fall back to `email`, which is
+    # honest rather than invented. Populated today only from Google's
+    # `profile` scope; not unique, not indexed — two people may share a name
+    # and nothing looks an account up by it.
+    display_name: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

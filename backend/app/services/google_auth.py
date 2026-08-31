@@ -45,6 +45,20 @@ def _consume_outstanding_codes(db: Session, user_id: int) -> None:
     db.flush()
 
 
+def _adopt_display_name(user: AppUser, identity: GoogleIdentity) -> None:
+    """Fill in a display name from Google, but never overwrite one we hold.
+
+    Only ever writes into a blank. Google is the sole source of names today,
+    so the two could not yet disagree — but the moment the account settings
+    grow a "what should we call you" field, a re-login silently reverting
+    the user's own choice to whatever their Google profile says would be a
+    genuinely baffling bug. Cheaper to be non-destructive now than to
+    remember this later.
+    """
+    if identity.name and not user.display_name:
+        user.display_name = identity.name
+
+
 def link_or_create_user(db: Session, identity: GoogleIdentity) -> AppUser:
     """Resolve a Google identity to an AppUser, linking or creating as needed."""
     # Google's address is normalized the same way create_user does, because
@@ -55,6 +69,10 @@ def link_or_create_user(db: Session, identity: GoogleIdentity) -> AppUser:
     # 1. Known Google account. Nothing to decide.
     existing = db.query(AppUser).filter_by(google_sub=identity.sub).one_or_none()
     if existing is not None:
+        # Also the backfill path for accounts created before the `profile`
+        # scope was requested: they have no name on file until they next
+        # sign in, and this is that moment.
+        _adopt_display_name(existing, identity)
         mark_email_verified(db, existing)
         return existing
 
@@ -67,6 +85,7 @@ def link_or_create_user(db: Session, identity: GoogleIdentity) -> AppUser:
             email=email,
             hashed_password=None,
             google_sub=identity.sub,
+            display_name=identity.name,
         )
         db.add(user)
         try:
@@ -77,6 +96,7 @@ def link_or_create_user(db: Session, identity: GoogleIdentity) -> AppUser:
             db.rollback()
             user = db.query(AppUser).filter_by(email=email).one()
             user.google_sub = identity.sub
+            _adopt_display_name(user, identity)
             db.flush()
         mark_email_verified(db, user)
         return user
@@ -85,6 +105,7 @@ def link_or_create_user(db: Session, identity: GoogleIdentity) -> AppUser:
     #    proven control of it, so linking is safe and the password stays.
     if by_email.email_verified_at is not None:
         by_email.google_sub = identity.sub
+        _adopt_display_name(by_email, identity)
         db.flush()
         return by_email
 
@@ -96,6 +117,11 @@ def link_or_create_user(db: Session, identity: GoogleIdentity) -> AppUser:
     #    /password-reset, which does require reading the inbox.
     by_email.google_sub = identity.sub
     by_email.hashed_password = None
+    # Safe even here: display_name is guaranteed blank on this branch (only
+    # Google ever writes it, and this account has never been linked), so
+    # there is nothing an attacker's unproven registration could have
+    # planted for the real owner to inherit.
+    _adopt_display_name(by_email, identity)
     db.flush()
     revoke_all_refresh_tokens(db, by_email.id)
     _consume_outstanding_codes(db, by_email.id)

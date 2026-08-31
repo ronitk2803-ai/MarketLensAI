@@ -87,6 +87,11 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: int
     email: str
+    # What to call this person in the chrome. None for every password
+    # signup — the register form doesn't ask for a name, and inventing one
+    # from the address is not an option here (§7 rule 1). The frontend falls
+    # back to `email`, so this stays honestly absent rather than guessed.
+    display_name: str | None = None
     # Carried here rather than on its own endpoint: the frontend's
     # AppHeader already awaits this payload on every page render, so the
     # bell's count costs zero extra round trips. A dedicated count
@@ -159,6 +164,7 @@ def me(
     return UserResponse(
         id=current_user.id,
         email=current_user.email,
+        display_name=current_user.display_name,
         unread_alert_count=unread_count(db, current_user.id),
         email_verified=current_user.email_verified_at is not None,
         has_password=current_user.hashed_password is not None,

@@ -8,9 +8,14 @@ import { useState } from "react";
 import type { AuthUser } from "@/lib/api";
 
 /**
- * Signed-out: a plain "Sign in" link. Signed-in: the account's email (only
- * this app knows it — nothing else here needs a name/avatar yet) plus a
+ * Signed-out: a plain "Sign in" link. Signed-in: the person's name plus a
  * sign-out icon button styled like ThemeToggle's.
+ *
+ * Falls back to the email address when there is no name, which is every
+ * password signup — the register form doesn't ask for one, and the backend
+ * will not derive one from the address. So the fallback is the common case
+ * for now, not an edge case, and it has to look deliberate rather than
+ * broken.
  *
  * `user` comes from the server (AppHeader reads the session cookie and
  * calls getCurrentUser — see lib/api.ts), so this component itself never
@@ -46,7 +51,12 @@ export function AccountControl({ user }: { user: AuthUser | null }) {
     <div className="flex items-center gap-1.5">
       <span className="hidden items-center gap-1 text-[11px] text-muted-foreground sm:flex">
         <User className="size-3" aria-hidden />
-        <span className="max-w-[140px] truncate">{user.email}</span>
+        {/* title carries the email even when a name is shown: it is still
+            the thing that identifies the account for support, and the name
+            alone can be ambiguous. */}
+        <span className="max-w-[140px] truncate" title={user.email}>
+          {user.display_name ?? user.email}
+        </span>
       </span>
       <button
         type="button"

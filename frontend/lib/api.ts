@@ -624,6 +624,10 @@ export interface AuthTokens {
 export interface AuthUser {
   id: number;
   email: string;
+  /** What to call this person. Null for password signups — the register
+   *  form never asks, and the backend won't invent one from the address.
+   *  Render sites fall back to `email`. */
+  display_name: string | null;
   /** Carried on the session payload rather than fetched separately —
    * AppHeader already awaits this on every page render, so the bell's
    * count costs no extra round trip. */

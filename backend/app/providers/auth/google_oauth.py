@@ -32,17 +32,21 @@ AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
-# `openid email` and nothing more. `profile` would add a name and picture we
-# don't display, and access_type=offline would hand us a refresh token we
-# discard immediately — both are consent-screen liabilities with no payoff.
-SCOPES = "openid email"
+# `openid email profile`. `profile` was previously refused on the grounds
+# that it bought a name and picture "we don't display" — that stopped being
+# true when the header started showing who is signed in, and an email
+# address is a poor and privacy-leaky thing to render as an identity. Only
+# `name` is read; the picture is still ignored. access_type=offline remains
+# refused: it would hand us a refresh token we discard immediately, which
+# is a consent-screen liability with no payoff.
+SCOPES = "openid email profile"
 
 _TIMEOUT = 10.0
 
 
 @dataclass(frozen=True, slots=True)
 class GoogleIdentity:
-    """The only three things we take from Google.
+    """The only things we take from Google.
 
     Parsed into a typed shape rather than passed around as the raw
     `dict[str, Any]` the API returns, so `email_verified` cannot silently
@@ -52,6 +56,11 @@ class GoogleIdentity:
     sub: str
     email: str
     email_verified: bool
+    # Optional because `profile` can be declined at the consent screen
+    # independently of `email`, and because Google omits it for some
+    # account types. None means "Google didn't tell us" — never a guess
+    # derived from the address, which would be fabrication (SUMMARISER §7).
+    name: str | None = None
 
 
 def _require_config() -> tuple[str, str, str]:
@@ -164,4 +173,14 @@ def exchange_code(code: str, *, client: httpx.Client | None = None) -> GoogleIde
             "Google has not verified this email address, so it cannot be used to sign in",
         )
 
-    return GoogleIdentity(sub=str(sub), email=str(email), email_verified=True)
+    # Whitespace-only is treated as absent: a display name of "" or " "
+    # would render as a blank identity in the header, which reads as a bug.
+    raw_name = payload.get("name")
+    name = str(raw_name).strip() if raw_name else None
+
+    return GoogleIdentity(
+        sub=str(sub),
+        email=str(email),
+        email_verified=True,
+        name=name or None,
+    )

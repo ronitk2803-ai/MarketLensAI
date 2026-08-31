@@ -133,7 +133,9 @@ def test_google_email_is_lowercased_before_lookup(db: Session) -> None:
     assert linked.id == existing.id
 
 
-def _exchange_with(monkeypatch: pytest.MonkeyPatch, userinfo: dict[str, object]) -> None:
+def _exchange_with(
+    monkeypatch: pytest.MonkeyPatch, userinfo: dict[str, object]
+) -> GoogleIdentity:
     """Drives exchange_code against a stubbed Google.
 
     Settings are patched on the module rather than through the environment,
@@ -158,7 +160,7 @@ def _exchange_with(monkeypatch: pytest.MonkeyPatch, userinfo: dict[str, object])
             return httpx.Response(200, json={"access_token": "at"})
         return httpx.Response(200, json=userinfo)
 
-    exchange_code("code", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return exchange_code("code", client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_an_unverified_google_address_never_reaches_the_linker(
@@ -220,3 +222,83 @@ def test_a_verified_identity_is_returned(monkeypatch: pytest.MonkeyPatch) -> Non
     assert identity.sub == "abc"
     assert identity.email == "Real@Example.com"
     assert identity.email_verified is True
+
+
+def _named(
+    name: str | None, sub: str = "google-sub-1", email: str = "gu@example.com"
+) -> GoogleIdentity:
+    return GoogleIdentity(sub=sub, email=email, email_verified=True, name=name)
+
+
+def test_a_new_google_account_stores_the_name_google_supplied(db: Session) -> None:
+    user = link_or_create_user(db, _named("Asha Nair", sub="named", email="named@example.com"))
+
+    assert user.display_name == "Asha Nair"
+
+
+def test_an_account_google_gave_no_name_for_keeps_a_null_display_name(db: Session) -> None:
+    """`profile` can be declined at the consent screen independently of
+    `email`. The fallback is the address itself — never a name derived from
+    it, which would be fabricating a fact about a person."""
+    user = link_or_create_user(db, _identity())
+
+    assert user.display_name is None
+
+
+def test_a_returning_sign_in_backfills_a_name_onto_an_older_account(db: Session) -> None:
+    """Accounts created before the `profile` scope was requested have no
+    name on file; the next sign-in is the only chance to pick one up."""
+    first = link_or_create_user(db, _identity(email="backfill@example.com"))
+    assert first.display_name is None
+
+    returning = link_or_create_user(db, _named("Ravi Menon", email="backfill@example.com"))
+
+    assert returning.id == first.id
+    assert returning.display_name == "Ravi Menon"
+
+
+def test_a_name_already_on_file_is_never_overwritten_by_google(db: Session) -> None:
+    """Guards the future account-settings field: a re-login must not revert
+    a name the user chose for themselves back to their Google profile's."""
+    user = link_or_create_user(db, _named("First Name", sub="keeper", email="keeper@example.com"))
+    user.display_name = "What They Chose"
+    db.flush()
+
+    returning = link_or_create_user(
+        db, _named("First Name", sub="keeper", email="keeper@example.com")
+    )
+
+    assert returning.display_name == "What They Chose"
+
+
+def test_the_name_google_supplies_is_read_off_userinfo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _exchange_with(
+        monkeypatch,
+        {"sub": "s", "email": "x@example.com", "email_verified": True, "name": "Priya Iyer"},
+    )
+
+    assert identity.name == "Priya Iyer"
+
+
+def test_a_blank_name_is_read_as_absent_not_as_an_empty_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A whitespace-only name would render as an empty header slot, which
+    reads as a broken page rather than as "no name on file"."""
+    identity = _exchange_with(
+        monkeypatch,
+        {"sub": "s", "email": "x@example.com", "email_verified": True, "name": "   "},
+    )
+
+    assert identity.name is None
+
+
+def test_userinfo_without_a_name_yields_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`profile` is a separate consent checkbox from `email`."""
+    identity = _exchange_with(
+        monkeypatch, {"sub": "s", "email": "x@example.com", "email_verified": True}
+    )
+
+    assert identity.name is None
