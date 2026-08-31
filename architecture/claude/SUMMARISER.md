@@ -23,7 +23,10 @@
 > cron-job.org keep-alive + a GitHub Actions nightly ingestion job. Google
 > sign-in **was broken on the live site and is fixed pending deploy** — see
 > §8.4, though §8.6's OOM is the likelier root cause of it. The backend was
-> **OOM-killed twice** on the 512 MB free instance; fixed 2026-09-01 (§8.6). **The hosted DB was freshly seeded** (500 companies, ~150k
+> **OOM-killed 8 times** on the 512 MB free instance (confirmed against
+> Render's own logs); fixed 2026-09-01 (§8.6), with a related connection-
+> pool exhaustion also fixed (§8.7). **The hosted DB was freshly seeded**
+> (500 companies, ~150k
 > price bars over 450 days, corporate actions, 500 scores). See §8.1 for the
 > live URLs and §11.6 for the deployment story; the granular blow-by-blow is
 > in `DEPLOY_STATUS.md`.
@@ -638,14 +641,45 @@ still correct and worth having, but it would not have fixed this — and a
 cold start and an OOM restart both surface as `google_unreachable`, so
 that error code does not tell them apart. The Render log does.
 
-- [ ] Not yet confirmed against the Render logs — the OOM line itself was
-      never read, so the diagnosis is measurement plus arithmetic, not the
-      platform's own account of the kill.
+- [x] **Confirmed against the Render logs, 2026-09-01.** The Events tab
+      (first-party, not inferred) shows 8 kills, all before the fix and
+      none after: `"Ran out of memory (used over 512MB) while running your
+      code."` at 11:22, 11:37, 11:40 and 11:44 PM Aug 31, then `"Exited
+      with status 137"` at 12:47, 12:49, 12:55 and 12:58 AM Sep 1. `5ad5f68`
+      (this fix) went live at 1:01 AM. Zero failures since.
 
 **Watch for this pattern elsewhere.** Any path that loads ORM rows per bar
 over the universe has the same profile. `alerts.py` uses `WEEK52_BARS`
 (252 -> 384 days, wider than anything on the homepage) but is scoped to
 watchlisted assets; `screener.py` goes through the same fixed loader.
+
+### 8.7 DB connection pool was too small — fixed 2026-09-01
+
+Found while reading the §8.6 logs for the OOM confirmation above: a
+separate, unrelated failure a few minutes after the fix deployed. A real
+visitor hit `500` on `GET /opportunities?screen=down_5d&industry=
+capital-goods` at 01:04:46 AM; the traceback resolved to
+
+```
+sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10 reached,
+connection timed out, timeout 30.00
+```
+
+`app/db/session.py` never set `pool_size`/`max_overflow`, so SQLAlchemy's
+defaults applied — 5 + 10 = 15 connections for the whole process (Render
+runs one uvicorn worker, so one engine, one pool). 16 identical timeouts
+landed in one 14-second burst (01:04:46-01:05:00 AM) and none since,
+searched across the full 2-day log window — a burst, not a sustained leak,
+most likely several visitors' concurrent requests (the homepage alone
+opens 4) landing right as the new instance's pool was still cold.
+
+**Fix:** `pool_size=10, max_overflow=20` (30 max, up from 15).
+`DATABASE_URL` is Neon's pooled endpoint (Deployment.md §1), which fronts
+far more capacity than a single free-tier instance will ever open, so this
+headroom costs nothing on the database side.
+
+- [ ] Not yet re-verified live — no repeat burst has been observed, but
+      the fix hasn't been deliberately load-tested either.
 
 ---
 
