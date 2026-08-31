@@ -17,10 +17,27 @@
 > A full re-verification pass on 2026-08-31 — all gates green (943 tests);
 > live prices, AI, and every page confirmed working — is in §11.5.
 >
-> **The one thing left is deployment.** The domain **marketlensai.in** is
-> purchased (GoDaddy). The app runs end-to-end in containers on the
-> developer's machine against a live 500-company database with 5 years of
-> prices, but **is not deployed to a public server yet** — see §8.1 and §11.
+> **DEPLOYED AND LIVE at <https://marketlensai.in> (2026-08-31).** The whole
+> stack is hosted on free tiers — Neon Postgres (Singapore) + Render (backend,
+> free) + Vercel (frontend, Hobby) + Resend (email, domain verified) + a
+> cron-job.org keep-alive + a GitHub Actions nightly ingestion job. Google
+> sign-in works. **The hosted DB was freshly seeded** (500 companies, ~150k
+> price bars over 450 days, corporate actions, 500 scores). See §8.1 for the
+> live URLs and §11.6 for the deployment story; the granular blow-by-blow is
+> in `DEPLOY_STATUS.md`.
+>
+> **Deploy repo is `github.com/ronitk2803-ai/MarketLensAI`**, NOT
+> `safiyat/ronrack` (the dev's hosting accounts had no access to the latter).
+> The local clone has two remotes — `origin` = safiyat/ronrack, `mine` =
+> ronitk2803-ai/MarketLensAI — and **every push must go to both**
+> (`git push origin main && git push mine main`); Render/Vercel auto-deploy
+> from `mine`.
+>
+> **Left to polish (not blockers):** finish the §7 smoke test on the live
+> site; the Render free dyno cold-starts (~20-45s) so the keep-alive ping
+> should be every 5 min not 10, and a Vercel 60s function timeout was added
+> to absorb it — moving Render to the ~$7/mo Starter plan removes both
+> problems and lets `ENABLE_SCHEDULER=true` replace the GitHub Actions job.
 >
 > **New to this project? Read §11 first** — it is the "where we are right
 > now and what to do next" section written for exactly that.
@@ -343,27 +360,30 @@ Root `.env` (gitignored) feeds `${VAR}` substitution into
 
 ## 8. Pending — operational
 
-### 8.1 Public hosting — NOT DONE
+### 8.1 Public hosting — DONE 2026-08-31
 
-The app has never been deployed to a public URL. Everything below is
-outstanding. `Deployment.md` is a complete runbook and the container images
-are proven locally, so this is account creation and env wiring, not code.
+Live at **<https://marketlensai.in>**. Full step log: `DEPLOY_STATUS.md`.
 
-- [ ] **Database:** create a Supabase or Neon project. Use the **direct**
-      (non-pooled) string for Alembic and, on Supabase, the **pooled
-      transaction-mode (port 6543)** string for runtime. Convert to
-      `postgresql+psycopg://…?sslmode=require`.
-- [ ] **Backend:** Render or Fly.io, building `backend/Dockerfile` (multi-stage
-      `uv`, ~217 MB, non-root). Health check `/api/v1/health`. Set every var in
-      §5.3 plus `ENABLE_SCHEDULER=true`.
-- [ ] **Frontend:** Vercel, project root `frontend`, set `API_BASE_URL`.
-- [ ] **Add the Vercel URL to the backend's `CORS_ORIGINS`** — otherwise fetches
-      fail silently in the console, not visibly on the page.
-- [ ] **Seed the hosted DB** (`universe` → `backfill_history` → `daily_ingestion`).
-- [ ] **No deploy configs exist yet** — there is no `vercel.json`, `render.yaml`,
-      `fly.toml` or `Procfile` in the repo. Each host is expected to
-      auto-detect; add config files if you want the deploy reproducible.
-- [ ] Work through the §7 smoke-test checklist in `Deployment.md`.
+| Piece | Where | Notes |
+|---|---|---|
+| Frontend | Vercel Hobby, project `market-lens-ai`, team "MLAI", root dir `frontend` | env `API_BASE_URL=https://mlai-backend.onrender.com/api/v1`. `next.config.ts` skips `output:"standalone"` when `VERCEL=1`. Data-heavy pages set `maxDuration=60`. |
+| Backend | Render free, service `mlai-backend`, `https://mlai-backend.onrender.com` | Docker, Singapore, `ENABLE_SCHEDULER=false`. **Cold-starts ~20-45s** after idle. Blueprint from `render.yaml` but env vars were set by hand. |
+| Database | Neon free, Singapore, PG17 | pooled string works for both Alembic and runtime. Seeded: 500 companies, ~150k bars (450d), corp actions, 500 scores. |
+| Keep-alive | cron-job.org hits `/api/v1/health` | currently every 10 min — **change to 5 min** (dyno goes cold between 10-min pings). |
+| Nightly ingestion | GitHub Actions `nightly-ingestion.yml` on `MarketLensAI` | secrets `DATABASE_URL` + `JWT_SECRET`; runs 20:00 IST. First manual run was green. |
+| Email | Resend, `marketlensai.in` verified | sender `MarketLens AI <noreply@marketlensai.in>` (a real GoDaddy mailbox). |
+| Google OAuth | one client, redirect `https://marketlensai.in/api/auth/google/callback` | sign-in verified working live. |
+| DNS | GoDaddy: `A @ 216.198.79.1` (Vercel). `CNAME www` still points to apex. | domain had a WHOIS "status hold" that had to be cleared first; a GoDaddy Website Builder draft site had to be deleted to free the `A` record. |
+
+- [ ] Still to do: finish the §7 smoke test on the live site; move the
+      keep-alive ping to 5 min; consider Render Starter (~$7/mo) to kill
+      cold-starts and let `ENABLE_SCHEDULER=true` replace the Actions job;
+      re-add `www.marketlensai.in` in Vercel if wanted; **reset the Neon
+      password if it hasn't been** (an early connection string was pasted in
+      chat — the dev says they rotated it).
+
+Deploy configs `render.yaml`, `backend/fly.toml` (unused alternative) and
+`frontend/vercel.json` now exist in the repo.
 
 ### 8.2 API keys
 
@@ -706,10 +726,14 @@ Eleven commits, all on `main`, all pushed, working tree clean:
   unreachable, that is almost always the cause — `podman compose -f
   docker-compose.prod.yml up -d`, not a code bug.
 
-### 11.3 Start here: deploying to marketlensai.in
+### 11.3 Deploying to marketlensai.in — DONE 2026-08-31
 
-The domain is bought (GoDaddy). Nothing else is done. Full runbook in
-`Deployment.md`; the order that matters:
+**This whole checklist is complete.** It's kept for reference; the actual
+step-by-step log with every quirk hit is in `DEPLOY_STATUS.md`, and the
+resulting live setup is the table in §8.1. If you're picking this up to
+*continue*, read §11.6, not this list.
+
+Full runbook in `Deployment.md`; the order that mattered: (historical)
 
 1. **Database** — create a Neon or Supabase project, hand over the connection
    string. Everything after "here is a connection string" is a coding task:
@@ -781,3 +805,36 @@ A second pass the same day, from the handover doc outward:
 
 **Still open before public launch:** the §8.3 security audit; a verified
 Resend domain (§8.2); the deploy itself (§8.1).
+
+### 11.6 Deployed — continue here (2026-08-31, late)
+
+The whole thing shipped in one long session. **Live at
+<https://marketlensai.in>.** Hosting map is the §8.1 table; the step log
+with every quirk (GoDaddy WHOIS hold, Website Builder site blocking the DNS
+record, Vercel monorepo detection, `output:"standalone"` breaking Vercel's
+build, the ai-summary test needing a Gemini-key stub in CI) is in
+`DEPLOY_STATUS.md`.
+
+**What a fresh session must know:**
+
+- **Two git remotes, push to both.** `origin` = safiyat/ronrack (the
+  original), `mine` = ronitk2803-ai/MarketLensAI (what Render + Vercel
+  deploy from). `git push origin main && git push mine main` after every
+  commit, or the live site won't update.
+- **Commits made this session** (all on both remotes): `6eeb376` deploy
+  configs + doc fixes, `341f945` corp-action dedup crash fix, `f20ed19`
+  free-tier wiring + nightly workflow, `8693763` + `b705514` Vercel build
+  fixes, `52ae0da` CI test fix, then the `maxDuration=60` frontend commit,
+  plus several `DEPLOY_STATUS.md` progress commits.
+- **Verified working live on marketlensai.in:** market overview, company
+  pages (chart + score), Google sign-in. CI green, nightly ingestion green.
+- **Known rough edges** (none block use): Render free cold-starts 20-45s —
+  bump the cron-job.org ping to every 5 min (§8.1); if still sluggish, the
+  fix is Render Starter (~$7/mo). Finish the `Deployment.md` §7 smoke test
+  (register → verify email → watchlist write → screener → research
+  assistant). Consider re-adding `www.`.
+- **Still genuinely pending** (pre-existing, not deploy work): the §8.3
+  security audit; XBRL fundamentals (§9.2); score backtesting (step 26);
+  Upstox intraday (step 27).
+- **When the dust settles:** fold §8.1 + this section into the doc body,
+  update §S/§4, and delete `DEPLOY_STATUS.md`.
