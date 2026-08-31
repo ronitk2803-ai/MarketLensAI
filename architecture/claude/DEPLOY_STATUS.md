@@ -73,7 +73,11 @@
 - [ ] **Step 6 — Resend domain.** resend.com/domains → add marketlensai.in → paste
       MX/SPF/DKIM into GoDaddy → set Render `RESEND_FROM_EMAIL=MarketLens AI <noreply@marketlensai.in>`.
       Until done, only the Resend account owner gets verification/reset email.
-- [ ] **Step 7 — GitHub Actions nightly.** Repo Settings → Secrets and variables → Actions:
+- [x] **Step 7 — GitHub Actions nightly DONE.** Secrets `DATABASE_URL` + `JWT_SECRET` added
+      on `ronitk2803-ai/MarketLensAI`; "Nightly ingestion #1" ran green (14m51s). Runs
+      daily 20:00 IST from now. CI was also failing on one test (ai-summary reachability
+      hit the no-key 502 branch in CI) — fixed in `52ae0da`, CI #9 green.
+- [ ] ~~Step 7 (old text)~~ Repo Settings → Secrets and variables → Actions:
       add `DATABASE_URL` (the +psycopg Neon string) and `JWT_SECRET` (any value). Then
       Actions tab → "Nightly ingestion" → Run workflow once to confirm.
       NOTE: the workflow file is on `mine/main` (ronitk2803-ai/MarketLensAI) — add the
