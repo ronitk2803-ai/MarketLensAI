@@ -5,6 +5,11 @@ const ERRORS: Record<string, string> = {
   google: "Google sign-in didn't complete. Try again.",
   google_state:
     "That sign-in link expired or didn't match this browser. Start again from here.",
+  // Distinct from `google` above because the user's next move differs: the
+  // backend never answered (free-tier cold start), so retrying in a moment
+  // genuinely does work, where a rejected credential would not.
+  google_unreachable:
+    "Google sign-in timed out while waking the server. Wait a few seconds and try again.",
 };
 
 export default async function LoginPage({

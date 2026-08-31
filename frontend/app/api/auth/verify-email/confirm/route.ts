@@ -5,6 +5,10 @@ import { ACCESS_TOKEN_COOKIE } from "@/lib/auth-cookies";
 
 export const dynamic = "force-dynamic";
 
+/** Cold-start ceiling — see app/api/auth/google/callback/route.ts. Every
+ * handler here blocks on the free-tier backend. */
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   const { code } = await request.json();
   if (typeof code !== "string") {

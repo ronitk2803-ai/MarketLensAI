@@ -24,6 +24,9 @@ import { absoluteUrl } from "@/lib/request-origin";
  */
 export const dynamic = "force-dynamic";
 
+/** Same cold-start ceiling as the callback — see that file's note. */
+export const maxDuration = 60;
+
 export async function GET(request: Request) {
   const state = crypto.randomUUID().replace(/-/g, "");
 
@@ -32,9 +35,12 @@ export async function GET(request: Request) {
     const response = NextResponse.redirect(url, 302);
     setOAuthStateCookie(response.cookies, state);
     return response;
-  } catch {
+  } catch (error) {
     // Nothing useful to show at this URL — send them back to the form,
-    // which renders the message.
+    // which renders the message. Log first: this is the only place the
+    // reason exists, and "couldn't even build the authorize URL" is a very
+    // different problem from a failed exchange on the way back.
+    console.error("[google-start] could not build authorize URL:", error);
     return NextResponse.redirect(absoluteUrl("/login?error=google", request), 302);
   }
 }

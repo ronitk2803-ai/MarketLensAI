@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { completeGoogleSignIn } from "@/lib/api";
+import { ApiError, completeGoogleSignIn } from "@/lib/api";
 import {
   OAUTH_STATE_COOKIE,
   clearOAuthStateCookie,
@@ -39,6 +39,17 @@ import { absoluteUrl } from "@/lib/request-origin";
  */
 export const dynamic = "force-dynamic";
 
+/**
+ * The backend is on a free Render dyno that cold-starts for 20-45s after an
+ * idle stretch, and this handler blocks on it for the token exchange. The
+ * platform default (10s on Hobby) killed the function mid-exchange, and
+ * because the only thing the user saw was this route's own catch-all
+ * redirect, a pure infrastructure timeout was indistinguishable from a
+ * rejected Google credential. The three data-heavy PAGES were given the
+ * same ceiling in c06b7d5; the auth route handlers were missed in that pass.
+ */
+export const maxDuration = 60;
+
 function back(request: Request, error: string) {
   const response = NextResponse.redirect(absoluteUrl(`/login?error=${error}`, request), 302);
   clearOAuthStateCookie(response.cookies);
@@ -75,7 +86,20 @@ export async function GET(request: Request) {
     clearOAuthStateCookie(response.cookies);
     setAuthCookies(response.cookies, tokens);
     return response;
-  } catch {
-    return back(request, "google");
+  } catch (error) {
+    // The bare `catch {}` this replaces threw the diagnosis away: a
+    // rejected Google grant, a 500 from the account-linking path, and the
+    // backend simply not answering in time all rendered as one generic
+    // message with nothing written down anywhere. Log the real reason —
+    // it is the only record, since the user only ever sees the redirect —
+    // and split the two cases the user can actually act on differently.
+    const reached = error instanceof ApiError;
+    console.error(
+      "[google-callback] sign-in failed:",
+      reached
+        ? `backend ${(error as ApiError).status}: ${(error as ApiError).detail ?? error.message}`
+        : error,
+    );
+    return back(request, reached ? "google" : "google_unreachable");
   }
 }

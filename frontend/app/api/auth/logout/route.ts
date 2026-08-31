@@ -5,6 +5,10 @@ import { clearAuthCookies, REFRESH_TOKEN_COOKIE } from "@/lib/auth-cookies";
 
 export const dynamic = "force-dynamic";
 
+/** Cold-start ceiling — see app/api/auth/google/callback/route.ts. Every
+ * handler here blocks on the free-tier backend. */
+export const maxDuration = 60;
+
 export async function POST() {
   const cookieStore = await cookies();
   const refreshToken = cookieStore.get(REFRESH_TOKEN_COOKIE)?.value;
