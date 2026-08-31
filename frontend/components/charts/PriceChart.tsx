@@ -141,7 +141,34 @@ export function PriceChart({
         horzLine: { color: mutedForeground, width: 1, style: 2, labelBackgroundColor: border },
       },
       rightPriceScale: { borderColor: border, scaleMargins: { top: 0.08, bottom: 0.25 } },
-      timeScale: { borderColor: border, rightOffset: 2 },
+      // fixLeftEdge/fixRightEdge stop pan and pinch-zoom-out at the data span,
+      // so the candles can never end up as a thin strip against one edge with
+      // a sea of empty chart beside them.
+      timeScale: {
+        borderColor: border,
+        rightOffset: 2,
+        fixLeftEdge: true,
+        fixRightEdge: true,
+      },
+      // The chart sits inside a scrolling page. By default the mouse wheel
+      // both pans and zooms the chart, which swallows the page scroll the
+      // moment the cursor crosses into it. Turn both wheel behaviours off:
+      // the page scrolls normally, panning is click-drag, and zoom is
+      // two-finger pinch (still on) or the range buttons above the chart.
+      // vertTouchDrag off for the same reason on touch — a vertical swipe
+      // should move the page, not the price scale.
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        mouseWheel: false,
+        pinch: true,
+        axisPressedMouseMove: true,
+        axisDoubleClickReset: true,
+      },
       autoSize: true,
     });
     chartRef.current = chart;
