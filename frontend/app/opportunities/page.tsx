@@ -14,6 +14,9 @@ import { cn } from "@/lib/utils";
 // request anyway (the fetch-level `revalidate` above already bounds
 // staleness), so force this dynamic rather than statically cached.
 export const dynamic = "force-dynamic";
+// See company/[symbol]/page.tsx — cold free-tier backend can exceed the
+// default 10s Vercel function budget.
+export const maxDuration = 60;
 
 export default async function OpportunitiesPage({
   searchParams,

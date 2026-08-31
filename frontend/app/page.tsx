@@ -13,6 +13,9 @@ import type { Meta, OpportunityHit } from "@/lib/api";
 // backend isn't reachable during `next build`) — same reasoning as
 // /opportunities.
 export const dynamic = "force-dynamic";
+// See company/[symbol]/page.tsx — cold free-tier backend can exceed the
+// default 10s Vercel function budget.
+export const maxDuration = 60;
 
 const BOARDS = [
   { screen: "down_5d", title: "Sharpest 5-day declines" },

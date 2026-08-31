@@ -26,6 +26,12 @@ import {
   type PriceRange,
 } from "@/lib/api";
 
+// This page fans out ~9 backend calls. On the free hosting tier (Render's
+// 0.5-CPU dyno waking from sleep + Neon compute resuming) that can exceed
+// Vercel's default 10s function budget and render "Couldn't load market
+// data". 60s is the Hobby-plan ceiling and covers a cold backend.
+export const maxDuration = 60;
+
 const RANGES: PriceRange[] = ["1m", "3m", "6m", "1y", "5y"];
 
 function isPriceRange(value: string | undefined): value is PriceRange {
