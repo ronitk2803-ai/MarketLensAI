@@ -8,6 +8,7 @@ would turn one screen run into N live calls, defeating the point).
 import datetime as dt
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset, Company, Industry, PriceOHLCV, Score
@@ -17,7 +18,11 @@ from app.engines.opportunity.base import Hit
 from app.engines.opportunity.ranking import RankedHit, apply_attention_ranking
 from app.engines.opportunity.registry import SCREENS
 from app.services.corporate_actions import get_stored_corporate_actions_bulk
-from app.services.prices import row_to_bar
+
+# Rows are streamed from the server in batches rather than buffered whole.
+# Sized to keep the round-trip count irrelevant (~100 batches for the widest
+# screen) without holding a meaningful slice of the universe in the driver.
+_STREAM_BATCH = 1000
 
 
 def load_universe_bars_with_ids(
@@ -49,23 +54,74 @@ def load_universe_bars_with_ids(
         if not asset_ids:
             return {}, {}
         filters.append(Asset.id.in_(asset_ids))
-    rows = (
-        db.query(PriceOHLCV, Asset)
+
+    # Columns, not entities — and emphatically not `db.query(PriceOHLCV,
+    # Asset)`. Hydrating an ORM instance per bar cost a measured 3.47 KB
+    # against 1.73 KB for the plain tuple, because each instance carries its
+    # own __dict__, Decimal objects for five Numeric columns, and an entry
+    # in the Session identity map that keeps the whole result alive. On the
+    # hosted universe below_dma200 (306 days, ~103k bars) that was ~350 MB
+    # of the 512 MB Render instance for ONE request, and the homepage fires
+    # four screens concurrently — the box was OOM-killed (exit 137).
+    # SUMMARISER.md §8.6.
+    #
+    # Bars are built while the result streams and the tuple is dropped
+    # immediately, so the raw rows and the Bar objects are never both fully
+    # resident.
+    stmt = (
+        select(
+            Asset.id,
+            Asset.symbol,
+            Asset.exchange,
+            Asset.market,
+            Asset.name,
+            PriceOHLCV.date,
+            PriceOHLCV.open,
+            PriceOHLCV.high,
+            PriceOHLCV.low,
+            PriceOHLCV.close,
+            PriceOHLCV.volume,
+            PriceOHLCV.oi,
+            PriceOHLCV.delivery_qty,
+            PriceOHLCV.delivery_pct,
+        )
         .join(Asset, Asset.id == PriceOHLCV.asset_id)
-        .filter(*filters)
+        .where(*filters)
         .order_by(Asset.id, PriceOHLCV.date)
-        .all()
+        .execution_options(yield_per=_STREAM_BATCH)
     )
 
-    bars_by_asset: dict[int, list[PriceOHLCV]] = {}
+    bars_by_asset: dict[int, list[Bar]] = {}
     asset_refs: dict[int, AssetRef] = {}
-    for price_row, asset_row in rows:
-        bars_by_asset.setdefault(asset_row.id, []).append(price_row)
-        asset_refs[asset_row.id] = AssetRef(
-            symbol=asset_row.symbol,
-            exchange=asset_row.exchange,
-            market=asset_row.market,
-            name=asset_row.name,
+    for row in db.execute(stmt):
+        bars = bars_by_asset.get(row.id)
+        if bars is None:
+            bars = bars_by_asset[row.id] = []
+            # Set once per asset, not once per bar: the old version rebuilt
+            # an identical AssetRef on every one of the ~200 rows per asset.
+            asset_refs[row.id] = AssetRef(
+                symbol=row.symbol,
+                exchange=row.exchange,
+                market=row.market,
+                name=row.name,
+            )
+        # float() at the boundary, matching services/prices.py's row_to_bar —
+        # Bar is a float-valued domain object and the engines do arithmetic
+        # on it. Kept in step with that function by hand; it takes an ORM
+        # instance and this takes a column tuple, so neither can call the
+        # other without giving back what this change bought.
+        bars.append(
+            Bar(
+                date=row.date,
+                open=float(row.open),
+                high=float(row.high),
+                low=float(row.low),
+                close=float(row.close),
+                volume=row.volume,
+                oi=row.oi,
+                delivery_qty=row.delivery_qty,
+                delivery_pct=float(row.delivery_pct) if row.delivery_pct is not None else None,
+            )
         )
 
     # One query for every asset's actions rather than one per asset: this
@@ -76,11 +132,14 @@ def load_universe_bars_with_ids(
 
     universe: dict[AssetRef, list[Bar]] = {}
     ids: dict[AssetRef, int] = {}
-    for asset_id, price_rows in bars_by_asset.items():
-        raw_bars = [row_to_bar(r) for r in price_rows]
-        actions = actions_by_asset.get(asset_id, [])
+    # pop(), not iteration: adjust_bars returns a new list, so keeping the
+    # raw one referenced would hold two full copies of the universe at the
+    # moment of peak usage. Draining as we go caps it at one plus the asset
+    # currently being adjusted.
+    for asset_id in list(bars_by_asset):
+        raw_bars = bars_by_asset.pop(asset_id)
         ref = asset_refs[asset_id]
-        universe[ref] = adjust_bars(raw_bars, actions)
+        universe[ref] = adjust_bars(raw_bars, actions_by_asset.get(asset_id, []))
         ids[ref] = asset_id
     return universe, ids
 
