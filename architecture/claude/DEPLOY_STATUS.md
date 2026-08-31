@@ -37,13 +37,23 @@
 
 ## Remaining: Steps 5-9
 
-- [ ] **Step 5 — DNS + wiring.** Vercel → Settings → Domains → add `marketlensai.in` +
-      `www`. GoDaddy DNS: delete parked `@` A/AAAA and default `CNAME www`; add
-      `A @ 76.76.21.21` and `CNAME www cname.vercel-dns.com` (use whatever Vercel's
-      Domains page says). Then: Render env `CORS_ORIGINS=https://marketlensai.in`
-      (currently already that value — confirm); add
-      `https://marketlensai.in/api/auth/google/callback` to the Google OAuth client in
-      Google Cloud Console AND confirm Render's `GOOGLE_REDIRECT_URI` matches byte-for-byte.
+- [~] **Step 5 — DNS + wiring. IN PROGRESS, BLOCKED IN GODADDY.**
+      - Vercel: `marketlensai.in` added, apex-only (no www — a www entry was deleted
+        during setup; re-add later if wanted), connected to Production, shows
+        "Invalid Configuration" pending DNS. `market-lens-ai-phi.vercel.app` is valid.
+      - Vercel wants ONE record: `A` `@` -> **216.198.79.1** (new Vercel IP; legacy
+        76.76.21.21 also works). Shown under the domain's "View DNS configuration".
+      - **BLOCKER:** GoDaddy won't let the `A @` record be edited/deleted — it's held by
+        a GoDaddy Website Builder **draft** site ("Market Lens AI", never published).
+        Fix: delete that draft site at websites.godaddy.com -> site -> Settings ->
+        Delete Site, then edit `A @` -> 216.198.79.1. (WHOIS verification was completed;
+        the yellow banner may lag a few hours but isn't the blocker.)
+      - GoDaddy already has `CNAME www -> marketlensai.in.` (fine, leave it). Leave NS,
+        SOA, `_dmarc` TXT, `_domainconnect` alone.
+      - AFTER DNS is green: Render env `CORS_ORIGINS` is already `https://marketlensai.in`
+        (confirm); add `https://marketlensai.in/api/auth/google/callback` to the Google
+        OAuth client in Google Cloud Console and confirm Render's `GOOGLE_REDIRECT_URI`
+        matches byte-for-byte.
 - [ ] **Step 6 — Resend domain.** resend.com/domains → add marketlensai.in → paste
       MX/SPF/DKIM into GoDaddy → set Render `RESEND_FROM_EMAIL=MarketLens AI <noreply@marketlensai.in>`.
       Until done, only the Resend account owner gets verification/reset email.
