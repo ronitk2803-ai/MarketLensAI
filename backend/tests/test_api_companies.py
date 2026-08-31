@@ -468,8 +468,16 @@ def test_get_ai_summary_stays_public(seeded_asset: Asset) -> None:
 def test_post_ai_summary_reaches_the_service_when_authenticated(
     seeded_asset: Asset, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from app.core.config import get_settings
     from app.services import company_summary as cs
 
+    # Stub the key the same way test_api_assistant.py's autouse fixture does —
+    # otherwise the endpoint's "no key configured" 502 branch fires wherever
+    # the environment has no GEMINI_API_KEY_1 (i.e. CI), and this test only
+    # passed locally because backend/.env happens to carry real keys.
+    monkeypatch.setattr(
+        type(get_settings()), "gemini_api_keys", property(lambda self: ["test-key"])
+    )
     monkeypatch.setattr(
         cs.GeminiSummaryProvider, "generate", lambda self, prompt: "a generated summary"
     )
