@@ -4,9 +4,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.models import Asset, Company, CorporateAction, Industry, PriceOHLCV
+from app.services import opportunities
 from app.services.corporate_actions import get_stored_corporate_actions_bulk
 from app.services.opportunities import (
+    _data_epoch,
     clear_screen_cache,
     list_industries,
     run_ranked_screen,
@@ -490,3 +493,70 @@ def test_actions_inside_the_window_are_still_returned_and_applied(db: Session) -
 
     assert len(filtered[asset.id]) == 1
     assert filtered[asset.id][0].ratio == 2.0
+
+
+# --- Data-epoch invalidation ---------------------------------------------
+#
+# The TTL is a floor under how often the universe is re-read; the epoch is
+# what actually bounds staleness. Without the epoch check a long TTL would
+# be a freshness bug rather than a saving: an entry minted shortly before
+# the nightly ingestion would keep serving pre-ingestion data for almost
+# a full extra day.
+
+
+def test_data_epoch_turns_over_after_the_ingestion_boundary(db: Session) -> None:
+    hour = get_settings().daily_ingestion_hour_ist  # 20 IST by default
+    # 18:00 IST — before ingestion, so "today's" screens still run on
+    # yesterday's data.
+    before = dt.datetime(2026, 9, 4, 12, 30, tzinfo=dt.UTC)  # 18:00 IST
+    # 22:00 IST — after ingestion plus its grace hour.
+    after = dt.datetime(2026, 9, 4, 16, 30, tzinfo=dt.UTC)  # 22:00 IST
+    assert hour == 20, "this test's IST clock arithmetic assumes the 20:00 default"
+
+    assert _data_epoch(before) == dt.date(2026, 9, 3)
+    assert _data_epoch(after) == dt.date(2026, 9, 4)
+
+
+def test_epoch_rollover_evicts_a_cached_screen_before_its_ttl_expires(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The load-bearing one: TTL is 24h, so nothing here expires on time —
+    only the epoch turning over can evict this entry."""
+    asset = Asset(symbol="ZZEPOCH", exchange="NSE", market="IN", name="Epoch Co")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    day_one = dt.date(2026, 9, 3)
+    monkeypatch.setattr(opportunities, "_data_epoch", lambda _now: day_one)
+    first = run_ranked_screen_with_sparklines(db, "down_10d")
+    assert "ZZEPOCH" in {r.hit.asset.symbol for r in first.ranked}
+
+    # Same TTL window, new data epoch — and the underlying data has changed.
+    db.query(PriceOHLCV).filter_by(asset_id=asset.id).delete()
+    db.flush()
+    monkeypatch.setattr(opportunities, "_data_epoch", lambda _now: dt.date(2026, 9, 4))
+
+    second = run_ranked_screen_with_sparklines(db, "down_10d")
+
+    assert "ZZEPOCH" not in {r.hit.asset.symbol for r in second.ranked}
+    assert second is not first
+
+
+def test_same_epoch_still_serves_the_cached_result(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side: an unchanged epoch must not force a re-read, or the
+    epoch check would have quietly disabled the cache entirely."""
+    asset = Asset(symbol="ZZEPOCH2", exchange="NSE", market="IN", name="Epoch Co 2")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    monkeypatch.setattr(opportunities, "_data_epoch", lambda _now: dt.date(2026, 9, 3))
+    first = run_ranked_screen_with_sparklines(db, "down_10d")
+    db.query(PriceOHLCV).filter_by(asset_id=asset.id).delete()
+    db.flush()
+    second = run_ranked_screen_with_sparklines(db, "down_10d")
+
+    assert second is first

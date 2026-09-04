@@ -321,7 +321,45 @@ class ScreenOutput:
 # industries share one computation instead of each one being its own cold
 # key — which is what a naive (screen, industry) cache would have done,
 # and it would have needed ~60x the memory to serve the same answers.
-_screen_cache: dict[tuple[str, int], tuple[float, ScreenOutput]] = {}
+_screen_cache: dict[tuple[str, int], tuple[float, dt.date, ScreenOutput]] = {}
+
+# Cache entries expire two ways: the TTL, and the arrival of new data.
+#
+# The TTL alone is not enough, and raising it makes that worse rather than
+# better. A screen's inputs change exactly once a day, when the nightly
+# ingestion lands — but a plain TTL is measured from whenever the entry
+# happened to be minted, which has nothing to do with that moment. At a
+# 24h TTL an entry created at 19:00 IST would go on serving pre-ingestion
+# data until 19:00 the FOLLOWING day: ~23 hours after the bars it should
+# have picked up were already in the database. The longer the TTL, the
+# worse that skew, which is the opposite of what a longer TTL is for.
+#
+# So an entry also carries the data epoch it was built in, and is
+# discarded when the epoch turns over regardless of remaining TTL. The
+# result is that a long TTL now buys only what it should — a floor under
+# how often the universe is re-read — while freshness is pinned to the
+# ingestion itself. Each screen is computed about once a day, shortly
+# after new data lands, no matter how long the TTL is.
+_IST_OFFSET = dt.timedelta(hours=5, minutes=30)
+# The ingestion job is not instantaneous, so the epoch turns over an hour
+# after it starts rather than at the same instant — otherwise the first
+# request at 20:00:01 could rebuild the cache from a half-written table
+# and then hold that for the whole day.
+_INGESTION_GRACE_HOURS = 1
+
+
+def _data_epoch(now_utc: dt.datetime) -> dt.date:
+    """Which day's ingested data a result computed *now* would be built on.
+
+    Wall-clock, deliberately — unlike app/core/rate_limit.py, which uses
+    `monotonic` precisely because it must never compare across a clock
+    jump. This one has to align to a real time of day, and the cost of a
+    clock step here is at worst one extra recompute, never a wrong answer.
+    """
+    settings = get_settings()
+    boundary = min(settings.daily_ingestion_hour_ist + _INGESTION_GRACE_HOURS, 23)
+    ist = now_utc + _IST_OFFSET
+    return ist.date() if ist.hour >= boundary else ist.date() - dt.timedelta(days=1)
 # One lock per key, not one global lock: two different screens must still
 # be able to compute concurrently (the homepage fires four at once), but
 # two callers wanting the SAME cold screen must not both load the
@@ -343,14 +381,15 @@ def _lock_for(key: tuple[str, int]) -> threading.Lock:
 
 def _cached_unfiltered(db: Session, screen_id: str, sessions: int) -> ScreenOutput:
     """The full, unfiltered ScreenOutput for one screen, computed at most
-    once per TTL across every caller and every industry filter."""
+    once per data epoch across every caller and every industry filter."""
     key = (screen_id, sessions)
     ttl = get_settings().screen_cache_ttl_seconds
+    epoch = _data_epoch(dt.datetime.now(dt.UTC))
     now = time.monotonic()
 
     entry = _screen_cache.get(key)
-    if entry is not None and now - entry[0] < ttl:
-        return entry[1]
+    if entry is not None and now - entry[0] < ttl and entry[1] == epoch:
+        return entry[2]
 
     with _lock_for(key):
         # Re-check inside the lock: while this thread waited, the thread it
@@ -358,10 +397,10 @@ def _cached_unfiltered(db: Session, screen_id: str, sessions: int) -> ScreenOutp
         # and recomputing it here would defeat the entire point of the lock.
         entry = _screen_cache.get(key)
         now = time.monotonic()
-        if entry is not None and now - entry[0] < ttl:
-            return entry[1]
+        if entry is not None and now - entry[0] < ttl and entry[1] == epoch:
+            return entry[2]
         output = _compute_unfiltered(db, screen_id, sessions)
-        _screen_cache[key] = (time.monotonic(), output)
+        _screen_cache[key] = (time.monotonic(), epoch, output)
         return output
 
 

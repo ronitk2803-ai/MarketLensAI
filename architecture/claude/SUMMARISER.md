@@ -812,13 +812,27 @@ views for the entire month** — which is why a 12-hour-old project was at
 3. **No backend cache existed.** A screen result is shared public market
    data derived from EOD bars that change once a day, and it was
    recomputed per request. `services/opportunities.py` now caches it,
-   keyed on `(screen_id, sessions)` and TTL'd by
-   `SCREEN_CACHE_TTL_SECONDS` (default 6h — still 4x fresher than the
-   data). The `industry` filter runs over the cached result, so all ~60
-   industries share one computation rather than each being its own cold
-   key. A per-key lock means two callers wanting the same cold screen
-   produce one universe load, not two — which also caps the transient
-   memory spike that caused §8.6.
+   keyed on `(screen_id, sessions)`. The `industry` filter runs over the
+   cached result, so all ~60 industries share one computation rather than
+   each being its own cold key. A per-key lock means two callers wanting
+   the same cold screen produce one universe load, not two — which also
+   caps the transient memory spike that caused §8.6.
+
+   **Entries expire two ways, and the second is the load-bearing one.**
+   `SCREEN_CACHE_TTL_SECONDS` (24h) is a *floor under how often the
+   universe is re-read*, not the staleness bound. Staleness is bounded
+   separately by the **data epoch**: an entry records which ingestion
+   cycle it was built in and is dropped when that turns over, however
+   much TTL remains. Without that, a longer TTL would be a freshness bug
+   rather than a saving — a plain 24h TTL is measured from whenever the
+   entry happened to be minted, so one created at 19:00 IST would serve
+   pre-ingestion data until 19:00 the *following* day, ~23 hours after
+   the bars it should have picked up were already in the database. The
+   epoch turns over an hour after `DAILY_INGESTION_HOUR_IST` so the job
+   has time to finish; rebuilding at 20:00:01 from a half-written table
+   and holding that all day is the failure this grace exists to prevent.
+   Net effect: each screen is computed about once a day, shortly after
+   new data lands, no matter how high the TTL goes.
 
 Frontend `getOpportunities` went 900s → 21600s to match the data's actual
 once-a-day cadence.
@@ -837,6 +851,11 @@ contribution is ~1.2 GB/month *regardless of traffic*.
       which needs a day or two of data.
 - [ ] `list_industries` is still an uncached per-request query on the
       `?industry=` validation path. ~2 KB, deliberately left alone.
+- [ ] The cache is per-process and in-memory, like `quotes.py`'s and the
+      rate limiter's. Render runs one uvicorn worker, so that is one
+      cache today — but a second worker or a second instance would each
+      keep their own, multiplying the daily re-read count by the worker
+      count. Worth remembering before scaling out, not before.
 
 ---
 
