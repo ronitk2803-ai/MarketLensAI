@@ -504,16 +504,60 @@ RSS are all free and unauthenticated.
       2026-08-29), but the research-analyst **positioning decision** itself
       has not been formally signed off (`Build_plan.md` §V.6). That is a
       business/legal judgment call, not a coding task.
-- [ ] **No full security audit has been completed.** One was launched
-      2026-08-31 (8 parallel reviewers: authn, authz, LLM/prompt-injection,
-      injection/validation, SSRF/secrets, DoS/rate-limit, frontend/BFF,
-      correctness) but **every agent aborted on a usage limit before
-      producing findings** — so it produced *no result at all*, neither a
-      clean bill of health nor a list of issues. **Do not read the absence
-      of findings as an absence of problems.** Re-run it before going
-      public; the highest-value targets are the newest code
-      (`research_assistant.py`'s tool dispatch and its 4 user-scoped tools,
-      `gemini_chat.py`, and the `/assistant/ask` surface).
+- [x] **Full security audit — completed 2026-09-04.** The 2026-08-31
+      attempt (8 parallel reviewers) had aborted on a usage limit before
+      producing any findings at all; this pass was run single-threaded
+      over the same eight areas and did produce results. Three issues,
+      all now fixed:
+
+      1. **Unauthenticated database-egress amplification (high).** The
+         economic DoS described in §8.9 — public `/opportunities`, 19.7 MB
+         a request, whole monthly allowance reachable by a stranger in
+         ~13 minutes. Fixed by the backend screen cache, which bounds cost
+         by TTL instead of by request count.
+      2. **Session cookies were issued without `Secure` in production
+         (medium).** `lib/auth-cookies.ts` gated it on `COOKIE_SECURE`,
+         which is deliberately not tied to `NODE_ENV` (the HTTP container
+         deploy needs it off) — but the variable appears in no
+         `render.yaml`, `vercel.json`, `DEPLOY_STATUS.md` or `.env`, while
+         the site has been live on HTTPS since 2026-08-31. Fixed by also
+         honouring `VERCEL=1`, which is always HTTPS and is already
+         relied on in `next.config.ts`, so the safe setting is no longer
+         the one someone has to remember.
+      3. **`X-Admin-Token` compared with `!=` (low).** Short-circuiting
+         string equality leaks the length of a correct prefix through
+         response timing, against a fixed secret with no rotation or
+         lockout. Now `secrets.compare_digest`.
+
+      Areas reviewed and found sound, for the record: password hashing
+      (Argon2, with a dummy-hash path so an unknown email costs the same
+      as a known one), JWT handling (explicit `algorithms=[HS256]`, so no
+      `alg=none`/confusion), refresh tokens (random, stored hashed,
+      rotated), ownership scoping (404-never-403 throughout), SQL
+      injection (no raw SQL anywhere — no `text()` with interpolation, no
+      f-string queries), code execution (no `eval`/`exec`/`pickle`/
+      `subprocess`), SSRF (every provider URL is built from a
+      DB-resolved `Asset`, never from raw request input), screener input
+      validation (depth/condition/children caps walked with an explicit
+      stack, `Literal` operators, metric allowlist), OAuth CSRF (state
+      minted httpOnly, compared on return, cleared on every branch),
+      open redirect (redirect targets are fixed relative paths), secrets
+      (none in any tracked file and none in git history — verified with
+      `--diff-filter=A` across all refs), and the LLM surface.
+
+      On the LLM surface specifically, which §8.3 previously called the
+      highest-value target: `research_assistant.py`'s design holds up.
+      The user-scoped tools take `current_user` from the request context
+      and expose no `user_id` in their JSON schema, so there is no
+      argument for an injected instruction to steer; every tool wraps a
+      `get_*`/`list_*` service, so none can write; and `_dispatch`'s
+      `**call.args` is safe against a hallucinated argument name because
+      a bad kwarg raises `TypeError`, which is caught and fed back to the
+      model. Its one real problem was cost, not authorization —
+      `run_screen` is exposed as a tool and could be called up to
+      `MAX_TOOL_CALLS` (6) times per question, each a full universe load.
+      The §8.9 cache fixes that too, since the tool goes through the same
+      cached path.
 
 **What *was* verified live on 2026-08-31** (manual checks, not a substitute
 for the audit above):
@@ -725,6 +769,93 @@ being honored.
       transfer graph — Neon's console has no per-query or hourly egress
       breakdown on the free plan, so confirmation is "the total stops
       climbing at the old rate," which needs a day or two of data to see.
+
+### 8.9 The screen path itself was the egress — fixed 2026-09-04
+
+§8.8 fixed the *frontend* cache that was defeating itself. This is the
+other half, found by a full audit of the read path: even perfectly cached
+at the frontend, the numbers did not add up. The reason is that nothing
+on the backend was cached at all, and one `/opportunities` request is
+enormous.
+
+**Measured, not modelled.** A synthetic universe shaped like the hosted
+one (500 active NSE equities, 320 sessions of bars, a 15,591-row
+`corporate_action` table) seeded into the local dev database, with
+`sum(pg_column_size(...))` over each query's actual result set:
+
+| Homepage board | Before | After | |
+|---|---|---|---|
+| `down_5d` | 2.56 MB | 0.95 MB | −62.9% |
+| `down_30d` | 5.35 MB | 2.72 MB | −49.3% |
+| `unusual_volume` | 4.29 MB | 2.05 MB | −52.3% |
+| `below_dma50` | 7.54 MB | 4.10 MB | −45.6% |
+| **one homepage render** | **19.7 MB** | **9.8 MB** | **−50.3%** |
+
+19.7 MB per render against a 5 GB monthly allowance is **~253 homepage
+views for the entire month** — which is why a 12-hour-old project was at
+88%. Three separate causes, all in the read path:
+
+1. **The whole `corporate_action` table shipped on every screen run.**
+   `get_stored_corporate_actions_bulk` had no date bound, so all 15,591
+   rows crossed the wire — four times over on one homepage render — to
+   use the handful inside the window. `engines/adjustment.py` only
+   applies a factor whose `ex_date` is *strictly after* the bar being
+   adjusted, so for a universe loaded with `date >= cutoff` every action
+   on or before that cutoff is provably a no-op. Adding `since=cutoff` is
+   therefore output-identical, not an approximation, and there are now
+   tests asserting both halves of that. **1.12 MB → 14 KB per screen.**
+2. **Asset identity columns were re-sent on every bar.** The loader
+   selected `symbol`/`exchange`/`market`/`name` on a join carrying ~200
+   rows per asset, to build an `AssetRef` identical across all of them.
+   Now one 500-row query for identity, and the bar query carries
+   `asset_id` alone. **37.1% off the per-row width.**
+3. **No backend cache existed.** A screen result is shared public market
+   data derived from EOD bars that change once a day, and it was
+   recomputed per request. `services/opportunities.py` now caches it,
+   keyed on `(screen_id, sessions)`. The `industry` filter runs over the
+   cached result, so all ~60 industries share one computation rather than
+   each being its own cold key. A per-key lock means two callers wanting
+   the same cold screen produce one universe load, not two — which also
+   caps the transient memory spike that caused §8.6.
+
+   **Entries expire two ways, and the second is the load-bearing one.**
+   `SCREEN_CACHE_TTL_SECONDS` (24h) is a *floor under how often the
+   universe is re-read*, not the staleness bound. Staleness is bounded
+   separately by the **data epoch**: an entry records which ingestion
+   cycle it was built in and is dropped when that turns over, however
+   much TTL remains. Without that, a longer TTL would be a freshness bug
+   rather than a saving — a plain 24h TTL is measured from whenever the
+   entry happened to be minted, so one created at 19:00 IST would serve
+   pre-ingestion data until 19:00 the *following* day, ~23 hours after
+   the bars it should have picked up were already in the database. The
+   epoch turns over an hour after `DAILY_INGESTION_HOUR_IST` so the job
+   has time to finish; rebuilding at 20:00:01 from a half-written table
+   and holding that all day is the failure this grace exists to prevent.
+   Net effect: each screen is computed about once a day, shortly after
+   new data lands, no matter how high the TTL goes.
+
+Frontend `getOpportunities` went 900s → 21600s to match the data's actual
+once-a-day cadence.
+
+**This was also a security finding, and the most serious one in the
+audit.** `/opportunities` is public and unauthenticated. The rate limiter
+caps requests-per-minute (20/min per IP) but nothing capped
+*bytes-per-request*, so at 19.7 MB a render a single stranger could spend
+the entire monthly database allowance in **roughly 13 minutes** — an
+economic denial-of-service needing no credentials and no volume worth
+alerting on. The backend cache is what actually closes it: cost is now
+bounded by the TTL, not by request count, so the homepage's whole
+contribution is ~1.2 GB/month *regardless of traffic*.
+
+- [ ] Same caveat as §8.8: not yet confirmed against Neon's own graph,
+      which needs a day or two of data.
+- [ ] `list_industries` is still an uncached per-request query on the
+      `?industry=` validation path. ~2 KB, deliberately left alone.
+- [ ] The cache is per-process and in-memory, like `quotes.py`'s and the
+      rate limiter's. Render runs one uvicorn worker, so that is one
+      cache today — but a second worker or a second instance would each
+      keep their own, multiplying the daily re-read count by the worker
+      count. Worth remembering before scaling out, not before.
 
 ---
 

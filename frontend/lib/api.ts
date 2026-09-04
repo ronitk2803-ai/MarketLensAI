@@ -396,11 +396,24 @@ export async function runScreener(
   return res.json() as Promise<{ data: OpportunityHit[]; meta: ScreenerMeta }>;
 }
 
+/** Six hours, not the 15 minutes this was until 2026-09-04.
+ *
+ *  A screen runs on end-of-day bars, which change exactly once a day when
+ *  the nightly ingestion lands (20:00 IST) — so a 15-minute window spent
+ *  96 round trips a day rebuilding a byte-identical answer, and each one
+ *  makes the backend stream the entire active universe's bars out of a
+ *  metered Postgres. That is the meter Neon's "88% of the monthly
+ *  transfer allowance" warning was measuring (SUMMARISER.md §8.8/§8.9).
+ *
+ *  Every distinct `industry` is its own cache key here, so this multiplies
+ *  by the number of filters anyone browses, which is what makes the
+ *  interval matter as much as it does. The backend now caches the same
+ *  result for the same reason; this simply stops asking for it. */
 export function getOpportunities(screen: string, industry?: string) {
   const params = new URLSearchParams({ screen });
   if (industry) params.set("industry", industry);
   return apiFetch<OpportunityHit[]>(`/opportunities?${params.toString()}`, {
-    next: { revalidate: 900 },
+    next: { revalidate: 21600 },
   });
 }
 

@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
@@ -12,9 +14,19 @@ def require_admin_token(x_admin_token: str | None = Header(default=None)) -> Non
 
     P0 has no user auth system yet, so this is a shared-secret header check
     against `ADMIN_TOKEN` rather than a full auth dependency.
+
+    `compare_digest`, not `!=`: Python's string equality short-circuits on
+    the first differing byte, so the time it takes to reject a guess leaks
+    how long its correct prefix was — enough, over many requests, to
+    recover the token one byte at a time. This is a single fixed secret
+    with no lockout and no rotation story, which is exactly the shape of
+    secret that attack is practical against. compare_digest takes the same
+    time regardless of where the mismatch falls.
     """
     settings = get_settings()
-    if not settings.admin_token or x_admin_token != settings.admin_token:
+    if not settings.admin_token or x_admin_token is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if not secrets.compare_digest(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=401, detail="unauthorized")
 
 

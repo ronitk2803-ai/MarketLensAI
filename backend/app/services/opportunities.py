@@ -6,11 +6,14 @@ would turn one screen run into N live calls, defeating the point).
 """
 
 import datetime as dt
+import threading
+import time
 from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.models import Asset, Company, Industry, PriceOHLCV, Score
 from app.domain.models import AssetRef, Bar
 from app.engines.adjustment import adjust_bars
@@ -68,13 +71,16 @@ def load_universe_bars_with_ids(
     # Bars are built while the result streams and the tuple is dropped
     # immediately, so the raw rows and the Bar objects are never both fully
     # resident.
+    # The Asset join stays (the filters above are on it) but NONE of its
+    # columns are selected here. They used to be, which meant symbol,
+    # exchange, market and name — ~40 bytes of the ~180-byte row — were
+    # re-transmitted on every one of an asset's ~200 bars to build an
+    # AssetRef that is identical across all of them. Postgres does not
+    # deduplicate that; it is paid per row, on the wire, every request.
+    # The identity columns are fetched once per asset below instead.
     stmt = (
         select(
-            Asset.id,
-            Asset.symbol,
-            Asset.exchange,
-            Asset.market,
-            Asset.name,
+            PriceOHLCV.asset_id,
             PriceOHLCV.date,
             PriceOHLCV.open,
             PriceOHLCV.high,
@@ -87,24 +93,15 @@ def load_universe_bars_with_ids(
         )
         .join(Asset, Asset.id == PriceOHLCV.asset_id)
         .where(*filters)
-        .order_by(Asset.id, PriceOHLCV.date)
+        .order_by(PriceOHLCV.asset_id, PriceOHLCV.date)
         .execution_options(yield_per=_STREAM_BATCH)
     )
 
     bars_by_asset: dict[int, list[Bar]] = {}
-    asset_refs: dict[int, AssetRef] = {}
     for row in db.execute(stmt):
-        bars = bars_by_asset.get(row.id)
+        bars = bars_by_asset.get(row.asset_id)
         if bars is None:
-            bars = bars_by_asset[row.id] = []
-            # Set once per asset, not once per bar: the old version rebuilt
-            # an identical AssetRef on every one of the ~200 rows per asset.
-            asset_refs[row.id] = AssetRef(
-                symbol=row.symbol,
-                exchange=row.exchange,
-                market=row.market,
-                name=row.name,
-            )
+            bars = bars_by_asset[row.asset_id] = []
         # float() at the boundary, matching services/prices.py's row_to_bar —
         # Bar is a float-valued domain object and the engines do arithmetic
         # on it. Kept in step with that function by hand; it takes an ORM
@@ -124,11 +121,35 @@ def load_universe_bars_with_ids(
             )
         )
 
+    # One row per asset that actually returned bars, rather than one per
+    # bar. ~500 rows against the ~28,000 the join used to carry them on.
+    asset_refs: dict[int, AssetRef] = {}
+    if bars_by_asset:
+        for asset_row in db.execute(
+            select(Asset.id, Asset.symbol, Asset.exchange, Asset.market, Asset.name).where(
+                Asset.id.in_(list(bars_by_asset))
+            )
+        ):
+            asset_refs[asset_row.id] = AssetRef(
+                symbol=asset_row.symbol,
+                exchange=asset_row.exchange,
+                market=asset_row.market,
+                name=asset_row.name,
+            )
+
     # One query for every asset's actions rather than one per asset: this
     # loop covers the whole active universe, so the per-asset version was
     # ~500 round trips per screen run — and the homepage runs four screens
     # concurrently.
-    actions_by_asset = get_stored_corporate_actions_bulk(db, list(bars_by_asset))
+    #
+    # `since=cutoff` is not a heuristic. adjust_bars only applies a factor
+    # whose ex_date is strictly after the bar it is adjusting, and no bar
+    # here predates `cutoff`, so an action on or before it cannot change a
+    # single output value. Without it this shipped the entire
+    # `corporate_action` table (15,591 rows on the hosted universe) on
+    # every screen run — four times over on one homepage render — to use
+    # the handful that fall inside the window.
+    actions_by_asset = get_stored_corporate_actions_bulk(db, list(bars_by_asset), since=cutoff)
 
     universe: dict[AssetRef, list[Bar]] = {}
     ids: dict[AssetRef, int] = {}
@@ -282,6 +303,132 @@ class ScreenOutput:
     industries: dict[str, tuple[str, str]]
 
 
+# --- Screen result cache -------------------------------------------------
+#
+# A screen run is by far the most expensive read in this app: it streams
+# every active asset's bars over the screen's lookback out of Postgres,
+# adjusts them, and evaluates. The result is *shared public market data* —
+# identical for every caller — derived from EOD bars that change once a
+# day, when the nightly ingestion lands. Recomputing it per request was
+# therefore pure waste, and on a metered database it was waste that cost
+# real money: /opportunities is public and unauthenticated, so the only
+# thing standing between a stranger and the whole month's egress budget
+# was the rate limiter, which bounds requests-per-minute and not
+# bytes-per-request (SUMMARISER.md §8.9).
+#
+# Cached UNFILTERED, keyed by (screen_id, sessions) only. The `industry`
+# filter is a pure list comprehension over the cached result, so all ~60
+# industries share one computation instead of each one being its own cold
+# key — which is what a naive (screen, industry) cache would have done,
+# and it would have needed ~60x the memory to serve the same answers.
+_screen_cache: dict[tuple[str, int], tuple[float, dt.date, ScreenOutput]] = {}
+
+# Cache entries expire two ways: the TTL, and the arrival of new data.
+#
+# The TTL alone is not enough, and raising it makes that worse rather than
+# better. A screen's inputs change exactly once a day, when the nightly
+# ingestion lands — but a plain TTL is measured from whenever the entry
+# happened to be minted, which has nothing to do with that moment. At a
+# 24h TTL an entry created at 19:00 IST would go on serving pre-ingestion
+# data until 19:00 the FOLLOWING day: ~23 hours after the bars it should
+# have picked up were already in the database. The longer the TTL, the
+# worse that skew, which is the opposite of what a longer TTL is for.
+#
+# So an entry also carries the data epoch it was built in, and is
+# discarded when the epoch turns over regardless of remaining TTL. The
+# result is that a long TTL now buys only what it should — a floor under
+# how often the universe is re-read — while freshness is pinned to the
+# ingestion itself. Each screen is computed about once a day, shortly
+# after new data lands, no matter how long the TTL is.
+_IST_OFFSET = dt.timedelta(hours=5, minutes=30)
+# The ingestion job is not instantaneous, so the epoch turns over an hour
+# after it starts rather than at the same instant — otherwise the first
+# request at 20:00:01 could rebuild the cache from a half-written table
+# and then hold that for the whole day.
+_INGESTION_GRACE_HOURS = 1
+
+
+def _data_epoch(now_utc: dt.datetime) -> dt.date:
+    """Which day's ingested data a result computed *now* would be built on.
+
+    Wall-clock, deliberately — unlike app/core/rate_limit.py, which uses
+    `monotonic` precisely because it must never compare across a clock
+    jump. This one has to align to a real time of day, and the cost of a
+    clock step here is at worst one extra recompute, never a wrong answer.
+    """
+    settings = get_settings()
+    boundary = min(settings.daily_ingestion_hour_ist + _INGESTION_GRACE_HOURS, 23)
+    ist = now_utc + _IST_OFFSET
+    return ist.date() if ist.hour >= boundary else ist.date() - dt.timedelta(days=1)
+# One lock per key, not one global lock: two different screens must still
+# be able to compute concurrently (the homepage fires four at once), but
+# two callers wanting the SAME cold screen must not both load the
+# universe. That second case is the one that matters — concurrent
+# identical loads are exactly the transient-memory spike that OOM-killed
+# this service before (§8.6), so serializing them caps peak memory as
+# well as saving the egress.
+_screen_locks: dict[tuple[str, int], threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _lock_for(key: tuple[str, int]) -> threading.Lock:
+    with _locks_guard:
+        lock = _screen_locks.get(key)
+        if lock is None:
+            lock = _screen_locks[key] = threading.Lock()
+        return lock
+
+
+def _cached_unfiltered(db: Session, screen_id: str, sessions: int) -> ScreenOutput:
+    """The full, unfiltered ScreenOutput for one screen, computed at most
+    once per data epoch across every caller and every industry filter."""
+    key = (screen_id, sessions)
+    ttl = get_settings().screen_cache_ttl_seconds
+    epoch = _data_epoch(dt.datetime.now(dt.UTC))
+    now = time.monotonic()
+
+    entry = _screen_cache.get(key)
+    if entry is not None and now - entry[0] < ttl and entry[1] == epoch:
+        return entry[2]
+
+    with _lock_for(key):
+        # Re-check inside the lock: while this thread waited, the thread it
+        # was waiting on has almost certainly just stored a fresh result,
+        # and recomputing it here would defeat the entire point of the lock.
+        entry = _screen_cache.get(key)
+        now = time.monotonic()
+        if entry is not None and now - entry[0] < ttl and entry[1] == epoch:
+            return entry[2]
+        output = _compute_unfiltered(db, screen_id, sessions)
+        _screen_cache[key] = (time.monotonic(), epoch, output)
+        return output
+
+
+def clear_screen_cache() -> None:
+    """Test hook — the module-level cache would otherwise leak between
+    tests, exactly as services/quotes.py's does."""
+    with _locks_guard:
+        _screen_cache.clear()
+
+
+def _compute_unfiltered(db: Session, screen_id: str, sessions: int) -> ScreenOutput:
+    """The actual work behind `_cached_unfiltered` — one universe load, one
+    screen evaluation, sparklines for every hit."""
+    hits, universe = _evaluate(db, screen_id, min_bars=sessions)
+    scores = _load_stored_scores(db, {h.asset for h in hits})
+    ranked = apply_attention_ranking(hits, scores)
+    industries = _load_industries(db, {h.asset for h in hits})
+
+    bars_by_symbol = {ref.symbol: bars for ref, bars in universe.items()}
+    sparklines = {
+        r.hit.asset.symbol: [
+            round(bar.close, 2) for bar in bars_by_symbol.get(r.hit.asset.symbol, [])[-sessions:]
+        ]
+        for r in ranked
+    }
+    return ScreenOutput(ranked=ranked, sparklines=sparklines, industries=industries)
+
+
 def run_ranked_screen_with_sparklines(
     db: Session, screen_id: str, *, sessions: int = SPARKLINE_SESSIONS, industry: str | None = None
 ) -> ScreenOutput:
@@ -292,23 +439,22 @@ def run_ranked_screen_with_sparklines(
     evaluate, which would otherwise render a 6-point stub next to
     below_dma200's full month.
 
-    `industry`, when given, filters to hits in that industry code *before*
-    sparklines are built, so a filtered request doesn't pay to adjust bars
-    for rows it's about to throw away.
+    Served from the shared screen cache above; `industry` filters that
+    cached result rather than driving its own computation. Sparklines are
+    now built for every hit rather than only the surviving ones — they
+    come off bars the screen already loaded and adjusted, so it is a slice
+    per hit and no extra query, and building them once for all industries
+    is what lets every industry share one cache entry.
     """
-    hits, universe = _evaluate(db, screen_id, min_bars=sessions)
-    scores = _load_stored_scores(db, {h.asset for h in hits})
-    ranked = apply_attention_ranking(hits, scores)
+    full = _cached_unfiltered(db, screen_id, sessions)
+    if industry is None:
+        return full
 
-    industries = _load_industries(db, {h.asset for h in hits})
-    if industry is not None:
-        ranked = [r for r in ranked if industries.get(r.hit.asset.symbol, ("", ""))[0] == industry]
-
-    bars_by_symbol = {ref.symbol: bars for ref, bars in universe.items()}
-    sparklines = {
-        r.hit.asset.symbol: [
-            round(bar.close, 2) for bar in bars_by_symbol.get(r.hit.asset.symbol, [])[-sessions:]
-        ]
-        for r in ranked
-    }
-    return ScreenOutput(ranked=ranked, sparklines=sparklines, industries=industries)
+    ranked = [
+        r for r in full.ranked if full.industries.get(r.hit.asset.symbol, ("", ""))[0] == industry
+    ]
+    return ScreenOutput(
+        ranked=ranked,
+        sparklines={r.hit.asset.symbol: full.sparklines[r.hit.asset.symbol] for r in ranked},
+        industries=full.industries,
+    )

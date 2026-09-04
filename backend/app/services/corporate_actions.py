@@ -5,7 +5,9 @@ import logging
 from dataclasses import dataclass
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.models import Asset, CorporateAction
 from app.domain.models import AssetRef, CorporateActionEvent
@@ -112,7 +114,7 @@ def get_stored_corporate_actions(db: Session, asset_id: int) -> list[CorporateAc
 
 
 def get_stored_corporate_actions_bulk(
-    db: Session, asset_ids: list[int]
+    db: Session, asset_ids: list[int], *, since: dt.date | None = None
 ) -> dict[int, list[CorporateActionEvent]]:
     """Same pure-DB-read contract as get_stored_corporate_actions, for the
     whole universe in one query instead of one per asset.
@@ -121,14 +123,39 @@ def get_stored_corporate_actions_bulk(
     meant ~500 round trips per screen run — and the homepage fires four
     screens at once. Assets with no stored actions are simply absent from
     the result; the caller treats a missing key as "no adjustments", which
-    is what adjust_bars does with an empty list anyway."""
+    is what adjust_bars does with an empty list anyway.
+
+    `since` drops actions that provably cannot affect the caller's bars.
+    engines/adjustment.py's `_cumulative` only multiplies in a factor whose
+    `ex_date` is *strictly after* the bar being adjusted, so for a universe
+    loaded with `date >= cutoff`, every action on or before that cutoff is
+    a guaranteed no-op. Passing it is therefore output-identical, not an
+    approximation — and it is the difference between shipping the whole
+    `corporate_action` table (15,591 rows on the hosted universe, most of
+    them years old) over the wire on every single screen run and shipping
+    the handful inside the window. Left None by default so callers that
+    genuinely want full history (the per-asset company page) are unchanged.
+
+    Columns, not entities, for the same reason as the universe bar loader
+    (services/opportunities.py, SUMMARISER.md §8.6): this builds plain
+    `CorporateActionEvent`s and never touches the other columns, so
+    hydrating a full ORM instance per row bought nothing and cost a
+    Session identity-map entry that kept every row alive."""
     if not asset_ids:
         return {}
-    rows = (
-        db.query(CorporateAction)
-        .filter(CorporateAction.asset_id.in_(asset_ids))
+    filters: list[ColumnElement[bool]] = [CorporateAction.asset_id.in_(asset_ids)]
+    if since is not None:
+        filters.append(CorporateAction.ex_date > since)
+    rows = db.execute(
+        select(
+            CorporateAction.asset_id,
+            CorporateAction.type,
+            CorporateAction.ex_date,
+            CorporateAction.ratio,
+            CorporateAction.amount,
+        )
+        .where(*filters)
         .order_by(CorporateAction.asset_id, CorporateAction.ex_date)
-        .all()
     )
     by_asset: dict[int, list[CorporateActionEvent]] = {}
     for row in rows:
