@@ -49,9 +49,21 @@ function baseOptions() {
     // read signed-out on the next request — Chromium grants `localhost`
     // itself an exception that let earlier testing through this browser
     // pane hide the bug, but it doesn't extend to every hostname/browser
-    // a real visitor might use. Set COOKIE_SECURE=true only once this app
-    // is actually behind HTTPS.
-    secure: process.env.COOKIE_SECURE === "true",
+    // a real visitor might use.
+    //
+    // `|| VERCEL` added 2026-09-04. COOKIE_SECURE alone made the SAFE
+    // setting the one you had to remember, and it was not remembered:
+    // the variable appears nowhere in render.yaml, vercel.json,
+    // DEPLOY_STATUS.md or any .env, while the site has been live on
+    // HTTPS at marketlensai.in since 2026-08-31 — so production was
+    // issuing both session cookies without `Secure`, i.e. willing to send
+    // them over plain HTTP to anyone who could force one request there.
+    // Vercel serves every deployment over HTTPS and sets VERCEL=1
+    // (already relied on in next.config.ts), so on Vercel this is simply
+    // always correct and needs nobody to remember anything. The explicit
+    // env var still works, and still governs the HTTP container deploy,
+    // which sets neither.
+    secure: process.env.COOKIE_SECURE === "true" || process.env.VERCEL === "1",
     sameSite: "lax" as const,
     path: "/",
   };

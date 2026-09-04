@@ -5,7 +5,9 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.db.models import Asset, Company, CorporateAction, Industry, PriceOHLCV
+from app.services.corporate_actions import get_stored_corporate_actions_bulk
 from app.services.opportunities import (
+    clear_screen_cache,
     list_industries,
     run_ranked_screen,
     run_ranked_screen_with_sparklines,
@@ -323,3 +325,168 @@ def test_list_industries_returns_every_seeded_industry_alphabetically(db: Sessio
     assert "Aaa First" in names
     assert "Zzz Last" in names
     assert names.index("Aaa First") < names.index("Zzz Last")
+
+
+# --- Screen result cache -------------------------------------------------
+#
+# The cache exists to stop /opportunities re-streaming the whole universe
+# out of a metered database on every request (SUMMARISER.md §8.9), so what
+# these assert is specifically that a second call does NOT reach the DB —
+# proven by changing the data underneath it and requiring the stale answer
+# back, which nothing but a cache hit can produce.
+
+
+def test_second_screen_run_is_served_from_cache_without_rereading_the_db(
+    db: Session,
+) -> None:
+    asset = Asset(symbol="ZZCACHE1", exchange="NSE", market="IN", name="Cache Co")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    first = run_ranked_screen_with_sparklines(db, "down_10d")
+    assert "ZZCACHE1" in {r.hit.asset.symbol for r in first.ranked}
+
+    # Delete every bar the hit was built from. An uncached implementation
+    # would now return nothing for this asset.
+    db.query(PriceOHLCV).filter_by(asset_id=asset.id).delete()
+    db.flush()
+
+    second = run_ranked_screen_with_sparklines(db, "down_10d")
+
+    assert "ZZCACHE1" in {r.hit.asset.symbol for r in second.ranked}
+    assert second is first
+
+
+def test_clearing_the_cache_makes_the_next_run_read_the_db_again(db: Session) -> None:
+    asset = Asset(symbol="ZZCACHE2", exchange="NSE", market="IN", name="Cache Co 2")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    run_ranked_screen_with_sparklines(db, "down_10d")
+    db.query(PriceOHLCV).filter_by(asset_id=asset.id).delete()
+    db.flush()
+    clear_screen_cache()
+
+    after = run_ranked_screen_with_sparklines(db, "down_10d")
+
+    assert "ZZCACHE2" not in {r.hit.asset.symbol for r in after.ranked}
+
+
+def test_industry_filter_off_a_cached_result_matches_an_uncached_filtered_run(
+    db: Session,
+) -> None:
+    """The filter moved from "narrow the query" to "narrow the cached
+    result" so that all ~60 industries share one computation. That is only
+    safe if it produces the identical answer."""
+    banking = _seed_industry(db, "ZZCBANK", "Cache Banking")
+    pharma = _seed_industry(db, "ZZCPHARMA", "Cache Pharma")
+    bank_asset = Asset(symbol="ZZCB1", exchange="NSE", market="IN", name="Cached Bank")
+    pharma_asset = Asset(symbol="ZZCP1", exchange="NSE", market="IN", name="Cached Pharma")
+    db.add_all([bank_asset, pharma_asset])
+    db.flush()
+    _attach_industry(db, bank_asset, banking)
+    _attach_industry(db, pharma_asset, pharma)
+    _add_bars(db, bank_asset, [100.0] * 10 + [70.0])
+    _add_bars(db, pharma_asset, [100.0] * 10 + [60.0])
+
+    # Cold cache, filtered directly.
+    clear_screen_cache()
+    cold = run_ranked_screen_with_sparklines(db, "down_10d", industry="ZZCBANK")
+    # Warm cache (populated unfiltered by the call above), filtered again.
+    warm = run_ranked_screen_with_sparklines(db, "down_10d", industry="ZZCBANK")
+
+    assert [r.hit.asset.symbol for r in cold.ranked] == [r.hit.asset.symbol for r in warm.ranked]
+    assert cold.sparklines == warm.sparklines
+    assert "ZZCB1" in {r.hit.asset.symbol for r in warm.ranked}
+    assert "ZZCP1" not in {r.hit.asset.symbol for r in warm.ranked}
+
+
+def test_cached_screen_is_not_shared_across_different_sparkline_lengths(db: Session) -> None:
+    """`sessions` is part of the cache key, not just the screen id — a
+    caller asking for a longer sparkline must not be handed a shorter
+    one built for someone else."""
+    asset = Asset(symbol="ZZCACHE3", exchange="NSE", market="IN", name="Cache Co 3")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 40 + [70.0])
+
+    short = run_ranked_screen_with_sparklines(db, "down_10d", sessions=5)
+    long = run_ranked_screen_with_sparklines(db, "down_10d", sessions=20)
+
+    assert len(short.sparklines["ZZCACHE3"]) == 5
+    assert len(long.sparklines["ZZCACHE3"]) == 20
+
+
+# --- Corporate-action window ---------------------------------------------
+
+
+def test_actions_before_the_window_are_excluded_but_change_nothing(db: Session) -> None:
+    """`get_stored_corporate_actions_bulk(..., since=cutoff)` is what stops
+    the whole `corporate_action` table (15,591 rows in production) shipping
+    on every screen run. It is only sound because engines/adjustment.py
+    applies a factor solely to bars STRICTLY BEFORE its ex_date — so an
+    action on or before the oldest loaded bar cannot move any output.
+
+    This asserts both halves: the old action really is dropped from the
+    query, and the adjusted screen result is identical with and without
+    it."""
+    asset = Asset(symbol="ZZCAWIN", exchange="NSE", market="IN", name="Window Co")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    today = dt.date.today()
+    cutoff = today - dt.timedelta(days=15)
+    # A 10:1 split three years before the window. Enormous ratio on
+    # purpose: if it were ever applied to these bars it would dwarf every
+    # other effect, so "results unchanged" is a meaningful assertion.
+    db.add(
+        CorporateAction(
+            asset_id=asset.id,
+            type="split",
+            ex_date=today - dt.timedelta(days=1000),
+            ratio=Decimal("10.0"),
+            source="test",
+        )
+    )
+    db.flush()
+
+    unfiltered = get_stored_corporate_actions_bulk(db, [asset.id])
+    filtered = get_stored_corporate_actions_bulk(db, [asset.id], since=cutoff)
+
+    assert len(unfiltered[asset.id]) == 1
+    assert asset.id not in filtered  # dropped from the wire entirely
+
+    hits = run_screen(db, "down_10d", lookback_days=15)
+    assert "ZZCAWIN" in {h.asset.symbol for h in hits}
+
+
+def test_actions_inside_the_window_are_still_returned_and_applied(db: Session) -> None:
+    """The other side of the cutoff: an action the window DOES cover must
+    survive the filter, or every split inside a screen's lookback would go
+    unadjusted and read as a crash."""
+    asset = Asset(symbol="ZZCAIN", exchange="NSE", market="IN", name="In Window Co")
+    db.add(asset)
+    db.flush()
+    _add_bars(db, asset, [100.0] * 10 + [70.0])
+
+    today = dt.date.today()
+    db.add(
+        CorporateAction(
+            asset_id=asset.id,
+            type="split",
+            ex_date=today - dt.timedelta(days=3),
+            ratio=Decimal("2.0"),
+            source="test",
+        )
+    )
+    db.flush()
+
+    filtered = get_stored_corporate_actions_bulk(
+        db, [asset.id], since=today - dt.timedelta(days=15)
+    )
+
+    assert len(filtered[asset.id]) == 1
+    assert filtered[asset.id][0].ratio == 2.0

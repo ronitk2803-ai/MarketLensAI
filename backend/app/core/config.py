@@ -97,6 +97,20 @@ class Settings(BaseSettings):
     enable_scheduler: bool = False
     daily_ingestion_hour_ist: int = 20
 
+    # How long a computed opportunity-screen result stays servable from
+    # memory (app/services/opportunities.py). Six hours, against data that
+    # only changes once a day: screens run on EOD bars, refreshed by the
+    # nightly ingestion at DAILY_INGESTION_HOUR_IST, so anything shorter
+    # re-reads the universe to rebuild a byte-identical answer.
+    #
+    # This is a cost control, not a nicety. Every miss streams the whole
+    # active universe's bars over the screen's lookback out of Postgres —
+    # on a metered database (Neon free tier: 5 GB/month of egress) an
+    # uncached /opportunities is the single most expensive thing a caller
+    # can ask for, and it is a public, unauthenticated endpoint. See
+    # SUMMARISER.md §8.9.
+    screen_cache_ttl_seconds: int = 6 * 3600
+
     # Whether to trust X-Forwarded-For for rate-limit IP keying (app/core/
     # rate_limit.py). Same shape as frontend/lib/auth-cookies.ts's
     # COOKIE_SECURE: explicit, env-driven, safe by default. False locally
